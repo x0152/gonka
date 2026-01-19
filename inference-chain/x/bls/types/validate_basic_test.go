@@ -175,27 +175,57 @@ func TestMsgSubmitPartialSignature_ValidateBasic(t *testing.T) {
 
 func TestMsgRequestThresholdSignature_ValidateBasic(t *testing.T) {
 	creator := mkAddr(t)
-	data := [][]byte{{1, 2, 3}} // any non-empty data slice is acceptable
+	data := [][]byte{{1, 2, 3}}
 
 	t.Run("valid", func(t *testing.T) {
-		msg := &MsgRequestThresholdSignature{Creator: creator, CurrentEpochId: 1, Data: data}
+		msg := &MsgRequestThresholdSignature{Creator: creator, CurrentEpochId: 1, Data: data, RequestId: []byte{1}}
 		require.NoError(t, msg.ValidateBasic())
 	})
 
 	t.Run("invalid creator", func(t *testing.T) {
-		msg := &MsgRequestThresholdSignature{Creator: "bad", CurrentEpochId: 1, Data: data}
+		msg := &MsgRequestThresholdSignature{Creator: "bad", CurrentEpochId: 1, Data: data, RequestId: []byte{1}}
 		err := msg.ValidateBasic()
 		require.Error(t, err)
 		require.True(t, errorsmod.IsOf(err, sdkerrors.ErrInvalidAddress))
 	})
 
 	t.Run("epoch zero", func(t *testing.T) {
-		msg := &MsgRequestThresholdSignature{Creator: creator, CurrentEpochId: 0, Data: data}
+		msg := &MsgRequestThresholdSignature{Creator: creator, CurrentEpochId: 0, Data: data, RequestId: []byte{1}}
 		require.Error(t, msg.ValidateBasic())
 	})
 
 	t.Run("empty data", func(t *testing.T) {
-		msg := &MsgRequestThresholdSignature{Creator: creator, CurrentEpochId: 1, Data: nil}
+		msg := &MsgRequestThresholdSignature{Creator: creator, CurrentEpochId: 1, Data: nil, RequestId: []byte{1}}
+		require.Error(t, msg.ValidateBasic())
+	})
+
+	t.Run("empty request_id", func(t *testing.T) {
+		msg := &MsgRequestThresholdSignature{Creator: creator, CurrentEpochId: 1, Data: data, RequestId: []byte{}}
+		require.Error(t, msg.ValidateBasic())
+	})
+
+	t.Run("request_id too long", func(t *testing.T) {
+		msg := &MsgRequestThresholdSignature{Creator: creator, CurrentEpochId: 1, Data: data, RequestId: make([]byte, MaxRequestIDLen+1)}
+		require.Error(t, msg.ValidateBasic())
+	})
+
+	t.Run("chain_id too long", func(t *testing.T) {
+		msg := &MsgRequestThresholdSignature{Creator: creator, CurrentEpochId: 1, Data: data, RequestId: []byte{1}, ChainId: make([]byte, MaxChainIDLen+1)}
+		require.Error(t, msg.ValidateBasic())
+	})
+
+	t.Run("too many data elements", func(t *testing.T) {
+		tooManyData := make([][]byte, MaxDataElements+1)
+		for i := range tooManyData {
+			tooManyData[i] = []byte{1}
+		}
+		msg := &MsgRequestThresholdSignature{Creator: creator, CurrentEpochId: 1, Data: tooManyData, RequestId: []byte{1}}
+		require.Error(t, msg.ValidateBasic())
+	})
+
+	t.Run("data element too long", func(t *testing.T) {
+		bigData := [][]byte{make([]byte, MaxDataElementLen+1)}
+		msg := &MsgRequestThresholdSignature{Creator: creator, CurrentEpochId: 1, Data: bigData, RequestId: []byte{1}}
 		require.Error(t, msg.ValidateBasic())
 	})
 }
