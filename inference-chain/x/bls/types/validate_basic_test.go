@@ -60,9 +60,7 @@ func TestMsgUpdateParams_ValidateBasic(t *testing.T) {
 
 func TestMsgSubmitDealerPart_ValidateBasic(t *testing.T) {
 	creator := mkAddr(t)
-
-	validCommitment := []byte{1} // any non-zero content is acceptable
-
+	validCommitment := make([]byte, G2CompressedSize) // 96 bytes
 	validShare := []byte{0x01, 0x02}
 
 	t.Run("valid", func(t *testing.T) {
@@ -98,6 +96,11 @@ func TestMsgSubmitDealerPart_ValidateBasic(t *testing.T) {
 		msg := &MsgSubmitDealerPart{Creator: creator, EpochId: 1, Commitments: [][]byte{validCommitment}, EncryptedSharesForParticipants: nil}
 		require.Error(t, msg.ValidateBasic())
 	})
+
+	t.Run("wrong commitment size", func(t *testing.T) {
+		msg := &MsgSubmitDealerPart{Creator: creator, EpochId: 1, Commitments: [][]byte{{1}}, EncryptedSharesForParticipants: []EncryptedSharesForParticipant{{EncryptedShares: [][]byte{validShare}}}}
+		require.Error(t, msg.ValidateBasic())
+	})
 }
 
 func TestMsgSubmitVerificationVector_ValidateBasic(t *testing.T) {
@@ -130,24 +133,34 @@ func TestMsgSubmitGroupKeyValidationSignature_ValidateBasic(t *testing.T) {
 	creator := mkAddr(t)
 
 	t.Run("valid", func(t *testing.T) {
-		msg := &MsgSubmitGroupKeyValidationSignature{Creator: creator, NewEpochId: 1, SlotIndices: []uint32{0, 2}}
+		msg := &MsgSubmitGroupKeyValidationSignature{
+			Creator:          creator,
+			NewEpochId:       1,
+			SlotIndices:      []uint32{0, 2},
+			PartialSignature: make([]byte, 2*ValidationG1Size), // 2 slots * 48 bytes
+		}
 		require.NoError(t, msg.ValidateBasic())
 	})
 
 	t.Run("invalid creator", func(t *testing.T) {
-		msg := &MsgSubmitGroupKeyValidationSignature{Creator: "bad", NewEpochId: 1, SlotIndices: []uint32{0}}
+		msg := &MsgSubmitGroupKeyValidationSignature{Creator: "bad", NewEpochId: 1, SlotIndices: []uint32{0}, PartialSignature: make([]byte, ValidationG1Size)}
 		err := msg.ValidateBasic()
 		require.Error(t, err)
 		require.True(t, errorsmod.IsOf(err, sdkerrors.ErrInvalidAddress))
 	})
 
 	t.Run("epoch zero", func(t *testing.T) {
-		msg := &MsgSubmitGroupKeyValidationSignature{Creator: creator, NewEpochId: 0, SlotIndices: []uint32{0}}
+		msg := &MsgSubmitGroupKeyValidationSignature{Creator: creator, NewEpochId: 0, SlotIndices: []uint32{0}, PartialSignature: make([]byte, ValidationG1Size)}
 		require.Error(t, msg.ValidateBasic())
 	})
 
 	t.Run("empty slot indices", func(t *testing.T) {
 		msg := &MsgSubmitGroupKeyValidationSignature{Creator: creator, NewEpochId: 1, SlotIndices: nil}
+		require.Error(t, msg.ValidateBasic())
+	})
+
+	t.Run("wrong signature size", func(t *testing.T) {
+		msg := &MsgSubmitGroupKeyValidationSignature{Creator: creator, NewEpochId: 1, SlotIndices: []uint32{0, 1}, PartialSignature: make([]byte, 10)}
 		require.Error(t, msg.ValidateBasic())
 	})
 }
@@ -156,19 +169,34 @@ func TestMsgSubmitPartialSignature_ValidateBasic(t *testing.T) {
 	creator := mkAddr(t)
 
 	t.Run("valid", func(t *testing.T) {
-		msg := &MsgSubmitPartialSignature{Creator: creator, SlotIndices: []uint32{1, 2}}
+		msg := &MsgSubmitPartialSignature{
+			Creator:          creator,
+			SlotIndices:      []uint32{1, 2},
+			RequestId:        []byte{1},
+			PartialSignature: make([]byte, 2*G1CompressedSize), // 2 slots * 48 bytes
+		}
 		require.NoError(t, msg.ValidateBasic())
 	})
 
 	t.Run("invalid creator", func(t *testing.T) {
-		msg := &MsgSubmitPartialSignature{Creator: "bad", SlotIndices: []uint32{1}}
+		msg := &MsgSubmitPartialSignature{Creator: "bad", SlotIndices: []uint32{1}, RequestId: []byte{1}, PartialSignature: make([]byte, G1CompressedSize)}
 		err := msg.ValidateBasic()
 		require.Error(t, err)
 		require.True(t, errorsmod.IsOf(err, sdkerrors.ErrInvalidAddress))
 	})
 
 	t.Run("empty slot indices", func(t *testing.T) {
-		msg := &MsgSubmitPartialSignature{Creator: creator, SlotIndices: nil}
+		msg := &MsgSubmitPartialSignature{Creator: creator, SlotIndices: nil, RequestId: []byte{1}}
+		require.Error(t, msg.ValidateBasic())
+	})
+
+	t.Run("empty request_id", func(t *testing.T) {
+		msg := &MsgSubmitPartialSignature{Creator: creator, SlotIndices: []uint32{1}, RequestId: []byte{}, PartialSignature: make([]byte, G1CompressedSize)}
+		require.Error(t, msg.ValidateBasic())
+	})
+
+	t.Run("wrong signature size", func(t *testing.T) {
+		msg := &MsgSubmitPartialSignature{Creator: creator, SlotIndices: []uint32{1, 2}, RequestId: []byte{1}, PartialSignature: make([]byte, 10)}
 		require.Error(t, msg.ValidateBasic())
 	})
 }

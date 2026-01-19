@@ -8,6 +8,11 @@ import (
 
 var _ sdk.Msg = &MsgSubmitGroupKeyValidationSignature{}
 
+const (
+	MaxValidationSlotIndices = 200
+	ValidationG1Size         = 48
+)
+
 func (m *MsgSubmitGroupKeyValidationSignature) ValidateBasic() error {
 	if _, err := sdk.AccAddressFromBech32(m.Creator); err != nil {
 		return errorsmod.Wrap(sdkerrors.ErrInvalidAddress, "invalid creator address")
@@ -17,6 +22,13 @@ func (m *MsgSubmitGroupKeyValidationSignature) ValidateBasic() error {
 	}
 	if len(m.SlotIndices) == 0 {
 		return errorsmod.Wrap(sdkerrors.ErrInvalidRequest, "slot_indices must be non-empty")
+	}
+	if len(m.SlotIndices) > MaxValidationSlotIndices {
+		return errorsmod.Wrapf(sdkerrors.ErrInvalidRequest, "slot_indices count exceeds max %d", MaxValidationSlotIndices)
+	}
+	expectedSigSize := len(m.SlotIndices) * ValidationG1Size
+	if len(m.PartialSignature) != expectedSigSize {
+		return errorsmod.Wrapf(sdkerrors.ErrInvalidRequest, "partial_signature must be %d bytes (48 per slot)", expectedSigSize)
 	}
 	return nil
 }
