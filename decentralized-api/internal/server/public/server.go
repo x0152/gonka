@@ -162,6 +162,13 @@ func NewServer(
 	// PoC artifact state endpoint (for testermint/validators to get real count and root_hash)
 	g.GET("poc/artifacts/state", s.getPocArtifactsState)
 
+	// OpenRouter-compatible API
+	openrouter := e.Group("/openrouter/api/v1")
+	openrouter.Use(middleware.LoggingMiddleware)
+	openrouter.GET("/models", s.getModelsOpenRouter)
+	openrouter.POST("/chat/completions", s.postChatOpenRouter)
+	openrouter.POST("/completions", s.postCompletionsOpenRouter)
+
 	return s
 }
 
