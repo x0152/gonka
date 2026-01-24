@@ -63,6 +63,144 @@ func TestReconnectInterval(t *testing.T) {
 	}
 }
 
+func TestWebSocketClient_URLConstruction(t *testing.T) {
+	client := NewWebSocketClient("test-node", "http://localhost:5000/api/v1", &cosmosclient.MockCosmosMessageClient{})
+	assert.Equal(t, "ws://localhost:5000/api/v1/pow/ws", client.wsURL)
+}
+
+func TestWebSocketClient_PingLoop(t *testing.T) {
+	prevWriteWait, prevPongWait, prevPingPeriod := writeWait, pongWait, pingPeriod
+	writeWait = 50 * time.Millisecond
+	pongWait = 100 * time.Millisecond
+	pingPeriod = 20 * time.Millisecond
+	defer func() {
+		writeWait = prevWriteWait
+		pongWait = prevPongWait
+		pingPeriod = prevPingPeriod
+	}()
+
+	pingReceived := make(chan struct{}, 1)
+	errChan := make(chan error, 1)
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		conn, err := upgrader.Upgrade(w, r, nil)
+		if err != nil {
+			errChan <- err
+			return
+		}
+		defer conn.Close()
+
+		conn.SetPingHandler(func(string) error {
+			select {
+			case pingReceived <- struct{}{}:
+			default:
+			}
+			return conn.WriteControl(websocket.PongMessage, nil, time.Now().Add(writeWait))
+		})
+
+		for {
+			if _, _, err := conn.ReadMessage(); err != nil {
+				return
+			}
+		}
+	}))
+	defer server.Close()
+
+	wsURL := "ws" + strings.TrimPrefix(server.URL, "http")
+	conn, _, err := websocket.DefaultDialer.Dial(wsURL, nil)
+	if !assert.NoError(t, err) {
+		return
+	}
+	defer conn.Close()
+
+	client := &WebSocketClient{
+		stopChan: make(chan struct{}),
+		ctx:      context.Background(),
+	}
+	done := make(chan struct{})
+	go client.pingLoop(conn, done)
+
+	select {
+	case <-pingReceived:
+	case err := <-errChan:
+		t.Fatalf("server error: %v", err)
+	case <-time.After(500 * time.Millisecond):
+		t.Fatal("expected ping not received")
+	}
+
+	close(done)
+}
+
+func TestWebSocketClient_PongHandlerKeepsAlive(t *testing.T) {
+	prevWriteWait, prevPongWait, prevPingPeriod := writeWait, pongWait, pingPeriod
+	writeWait = 50 * time.Millisecond
+	pongWait = 200 * time.Millisecond
+	pingPeriod = 50 * time.Millisecond
+	defer func() {
+		writeWait = prevWriteWait
+		pongWait = prevPongWait
+		pingPeriod = prevPingPeriod
+	}()
+
+	errChan := make(chan error, 1)
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		conn, err := upgrader.Upgrade(w, r, nil)
+		if err != nil {
+			errChan <- err
+			return
+		}
+		defer conn.Close()
+
+		conn.SetPingHandler(func(appData string) error {
+			return conn.WriteControl(websocket.PongMessage, []byte(appData), time.Now().Add(writeWait))
+		})
+
+		for {
+			if _, _, err := conn.ReadMessage(); err != nil {
+				return
+			}
+		}
+	}))
+	defer server.Close()
+
+	wsURL := "ws" + strings.TrimPrefix(server.URL, "http")
+	conn, _, err := websocket.DefaultDialer.Dial(wsURL, nil)
+	if !assert.NoError(t, err) {
+		return
+	}
+	defer conn.Close()
+
+	client := &WebSocketClient{
+		conn:     conn,
+		handler:  NewBatchHandler(&cosmosclient.MockCosmosMessageClient{}),
+		stopChan: make(chan struct{}),
+		ctx:      context.Background(),
+	}
+
+	done := make(chan struct{})
+	go func() {
+		client.handleMessages()
+		close(done)
+	}()
+
+	select {
+	case <-done:
+		t.Fatal("connection closed before pong wait elapsed")
+	case err := <-errChan:
+		t.Fatalf("server error: %v", err)
+	case <-time.After(250 * time.Millisecond):
+	}
+
+	close(client.stopChan)
+
+	select {
+	case <-done:
+	case <-time.After(500 * time.Millisecond):
+		t.Fatal("expected handleMessages to stop")
+	}
+}
+
 func TestWebSocketClient_MessageProcessing(t *testing.T) {
 	mockRecorder := &cosmosclient.MockCosmosMessageClient{}
 	mockRecorder.On("SubmitPocBatch", mock.AnythingOfType("*inference.MsgSubmitPocBatch")).Return(nil)
@@ -81,13 +219,13 @@ func TestWebSocketClient_MessageProcessing(t *testing.T) {
 			Dist:        []float64{0.1, 0.2, 0.3},
 		}
 		batchJSON, _ := json.Marshal(generatedBatch)
-		
+
 		message := WebSocketMessage{
 			Type:  "generated",
 			Batch: batchJSON,
 			ID:    "test-message-123",
 		}
-		
+
 		if err := conn.WriteJSON(message); err != nil {
 			t.Logf("Failed to write message: %v", err)
 			return
@@ -107,7 +245,7 @@ func TestWebSocketClient_MessageProcessing(t *testing.T) {
 	defer server.Close()
 
 	wsURL := "ws" + strings.TrimPrefix(server.URL, "http")
-	
+
 	client := &WebSocketClient{
 		nodeID:      "test-node",
 		wsURL:       wsURL,
@@ -196,7 +334,7 @@ func TestWebSocketClient_ProcessMessage_Generated(t *testing.T) {
 
 func TestWebSocketClient_ProcessMessage_Validated(t *testing.T) {
 	validPubKey := "02a1633cafcc01ebfb6d78e39f687a1f0995c62fc95f51ead10a02ee0be551b5dc"
-	
+
 	mockRecorder := &cosmosclient.MockCosmosMessageClient{}
 	mockRecorder.On("SubmitPoCValidation", mock.AnythingOfType("*inference.MsgSubmitPocValidation")).Return(nil)
 
@@ -256,4 +394,3 @@ func TestWebSocketClient_ProcessMessage_UnknownType(t *testing.T) {
 	assert.Equal(t, "", messageID)
 	assert.Contains(t, err.Error(), "unknown message type")
 }
-

@@ -168,7 +168,8 @@ func (w *NodeWorker) startWebSocket(recorder cosmosclient.CosmosMessageClient) {
 		return
 	}
 
-	pocURL := w.node.Node.PoCUrl()
+	version := w.broker.configManager.GetCurrentNodeVersion()
+	pocURL := w.node.Node.PoCUrlWithVersion(version)
 	w.wsClient = NewWebSocketClient(w.nodeId, pocURL, recorder)
 	w.wsClient.Start()
 	

@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"math/rand"
+	"net/url"
 	"sync"
 	"time"
 
@@ -16,9 +17,9 @@ import (
 )
 
 type WebSocketMessage struct {
-	Type  string                       `json:"type"`
-	Batch json.RawMessage              `json:"batch"`
-	ID    string                       `json:"id"`
+	Type  string          `json:"type"`
+	Batch json.RawMessage `json:"batch"`
+	ID    string          `json:"id"`
 }
 
 type AckMessage struct {
@@ -36,12 +37,19 @@ type WebSocketClient struct {
 	stoppedChan chan struct{}
 	ctx         context.Context
 	cancel      context.CancelFunc
+	stopOnce    sync.Once
 }
+
+var (
+	writeWait  = 10 * time.Second
+	pongWait   = 60 * time.Second
+	pingPeriod = (pongWait * 9) / 10
+)
 
 func NewWebSocketClient(nodeID string, pocURL string, recorder cosmosclient.CosmosMessageClient) *WebSocketClient {
 	ctx, cancel := context.WithCancel(context.Background())
-	wsURL := convertHTTPToWSURL(pocURL) + "/api/v1/pow/ws"
-	
+	wsURL, _ := url.JoinPath(convertHTTPToWSURL(pocURL), "pow/ws")
+
 	return &WebSocketClient{
 		nodeID:      nodeID,
 		wsURL:       wsURL,
@@ -58,14 +66,16 @@ func (c *WebSocketClient) Start() {
 }
 
 func (c *WebSocketClient) Stop() {
-	close(c.stopChan)
-	c.cancel()
+	c.stopOnce.Do(func() {
+		close(c.stopChan)
+		c.cancel()
+	})
 	<-c.stoppedChan
 }
 
 func (c *WebSocketClient) run() {
 	defer close(c.stoppedChan)
-	
+
 	for {
 		select {
 		case <-c.stopChan:
@@ -76,7 +86,7 @@ func (c *WebSocketClient) run() {
 			return
 		default:
 			c.connectAndHandle()
-			
+
 			select {
 			case <-c.stopChan:
 				return
@@ -90,12 +100,12 @@ func (c *WebSocketClient) run() {
 
 func (c *WebSocketClient) connectAndHandle() {
 	if err := c.connect(); err != nil {
-		logging.Debug("WebSocket. Failed to connect", types.PoC, 
+		logging.Debug("WebSocket. Failed to connect", types.PoC,
 			"nodeId", c.nodeID, "error", err)
 		return
 	}
 
-	logging.Info("WebSocket. Connected to node", types.PoC, 
+	logging.Info("WebSocket. Connected to node", types.PoC,
 		"nodeId", c.nodeID, "wsURL", c.wsURL)
 
 	c.handleMessages()
@@ -132,6 +142,23 @@ func (c *WebSocketClient) closeConnection() {
 func (c *WebSocketClient) handleMessages() {
 	defer c.closeConnection()
 
+	c.mu.RLock()
+	conn := c.conn
+	c.mu.RUnlock()
+
+	if conn == nil {
+		return
+	}
+
+	conn.SetReadDeadline(time.Now().Add(pongWait))
+	conn.SetPongHandler(func(string) error {
+		return conn.SetReadDeadline(time.Now().Add(pongWait))
+	})
+
+	done := make(chan struct{})
+	defer close(done)
+	go c.pingLoop(conn, done)
+
 	for {
 		select {
 		case <-c.stopChan:
@@ -139,39 +166,50 @@ func (c *WebSocketClient) handleMessages() {
 		case <-c.ctx.Done():
 			return
 		default:
-			c.mu.RLock()
-			conn := c.conn
-			c.mu.RUnlock()
-
-			if conn == nil {
-				return
-			}
-
-			conn.SetReadDeadline(time.Now().Add(60 * time.Second))
-			
 			_, rawMessage, err := conn.ReadMessage()
 			if err != nil {
-				logging.Debug("WebSocket. Read error, will reconnect", types.PoC, 
+				logging.Debug("WebSocket. Read error, will reconnect", types.PoC,
 					"nodeId", c.nodeID, "error", err)
 				return
 			}
 
 			messageID, err := c.processMessage(rawMessage)
 			if err != nil {
-				logging.Error("WebSocket. Failed to process message", types.PoC, 
+				logging.Error("WebSocket. Failed to process message", types.PoC,
 					"nodeId", c.nodeID, "error", err)
 				continue
 			}
 
 			if messageID != "" {
 				if err := c.sendAck(messageID); err != nil {
-					logging.Error("WebSocket. Failed to send acknowledgment", types.PoC, 
+					logging.Error("WebSocket. Failed to send acknowledgment", types.PoC,
 						"nodeId", c.nodeID, "messageId", messageID, "error", err)
 					return
 				}
-				
-				logging.Debug("WebSocket. Sent acknowledgment", types.PoC, 
+
+				logging.Debug("WebSocket. Sent acknowledgment", types.PoC,
 					"nodeId", c.nodeID, "messageId", messageID)
+			}
+		}
+	}
+}
+
+func (c *WebSocketClient) pingLoop(conn *websocket.Conn, done <-chan struct{}) {
+	ticker := time.NewTicker(pingPeriod)
+	defer ticker.Stop()
+
+	for {
+		select {
+		case <-done:
+			return
+		case <-c.stopChan:
+			return
+		case <-c.ctx.Done():
+			return
+		case <-ticker.C:
+			conn.SetWriteDeadline(time.Now().Add(writeWait))
+			if err := conn.WriteMessage(websocket.PingMessage, nil); err != nil {
+				return
 			}
 		}
 	}
@@ -193,7 +231,7 @@ func (c *WebSocketClient) processMessage(rawMessage []byte) (string, error) {
 			return "", fmt.Errorf("failed to handle generated batch: %w", err)
 		}
 		return msg.ID, nil
-		
+
 	case "validated":
 		var batch mlnodeclient.ValidatedBatch
 		if err := json.Unmarshal(msg.Batch, &batch); err != nil {
@@ -203,7 +241,7 @@ func (c *WebSocketClient) processMessage(rawMessage []byte) (string, error) {
 			return "", fmt.Errorf("failed to handle validated batch: %w", err)
 		}
 		return msg.ID, nil
-		
+
 	default:
 		return "", fmt.Errorf("unknown message type: %s", msg.Type)
 	}
@@ -222,17 +260,17 @@ func (c *WebSocketClient) sendAck(messageID string) error {
 		Type: "ack",
 		ID:   messageID,
 	}
-	
+
 	ackData, err := json.Marshal(ack)
 	if err != nil {
 		return fmt.Errorf("failed to marshal ack: %w", err)
 	}
-	
+
 	conn.SetWriteDeadline(time.Now().Add(10 * time.Second))
 	if err := conn.WriteMessage(websocket.TextMessage, ackData); err != nil {
 		return fmt.Errorf("failed to write ack: %w", err)
 	}
-	
+
 	return nil
 }
 
@@ -251,4 +289,3 @@ func reconnectInterval() time.Duration {
 	jitter := time.Duration(rand.Intn(2000)) * time.Millisecond
 	return base + jitter
 }
-
