@@ -250,8 +250,8 @@ async def websocket_endpoint(websocket: WebSocket):
                 logger.error(f"WebSocket task error: {task.exception()}")
                 raise task.exception()
     
-    except WebSocketDisconnect:
-        logger.info("WebSocket connection disconnected by client")
+    except WebSocketDisconnect as e:
+        logger.info(f"WebSocket connection disconnected by client: code={getattr(e, 'code', None)}")
     except Exception as e:
         logger.error(f"WebSocket error: {e}")
     finally:

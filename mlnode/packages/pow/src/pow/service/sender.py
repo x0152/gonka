@@ -1,4 +1,5 @@
 import time
+import os
 import uuid
 import requests
 import queue
@@ -45,13 +46,14 @@ class Sender(Process):
         self.websocket_out_queue = websocket_out_queue
         self.websocket_ack_queue = websocket_ack_queue
         self.websocket_connected = websocket_connected
+        self.ws_ack_timeout = float(os.getenv("POW_WS_ACK_TIMEOUT", "5.0"))
 
         self.in_validation: List[InValidation] = []
         self.generated_not_sent: List[ProofBatch] = []
         self.validated_not_sent: List[ValidatedBatch] = []
         self.stop_event = Event()
 
-    def _try_send_via_websocket(self, batch_type: str, batch: dict, timeout: float = 3.0) -> bool:
+    def _try_send_via_websocket(self, batch_type: str, batch: dict) -> bool:
         if not self.websocket_connected or self.websocket_connected.value == 0:
             return False
         
@@ -74,6 +76,7 @@ class Sender(Process):
             
             logger.info(f"Sent {batch_type} batch via WebSocket, waiting for ack")
             
+            timeout = self.ws_ack_timeout
             start_time = time.time()
             collected_acks = []
             max_ack_age = timeout * 2
@@ -120,6 +123,7 @@ class Sender(Process):
             
             if not sent:
                 try:
+                    logger.info("WebSocket fallback to HTTP for generated batch")
                     logger.info(f"Sending generated batch to {self.url} via HTTP")
                     response = requests.post(
                         f"{self.url}/generated",
@@ -144,6 +148,7 @@ class Sender(Process):
             
             if not sent:
                 try:
+                    logger.info("WebSocket fallback to HTTP for validated batch")
                     logger.info(f"Sending validated batch to {self.url} via HTTP")
                     response = requests.post(
                         f"{self.url}/validated",
