@@ -5,6 +5,8 @@ import (
 	"decentralized-api/cosmosclient"
 	"decentralized-api/logging"
 	"decentralized-api/mlnodeclient"
+	"os"
+	"strings"
 	"sync"
 	"time"
 
@@ -162,6 +164,15 @@ func (w *NodeWorker) GetClient() mlnodeclient.MLNodeClient {
 func (w *NodeWorker) startWebSocket(recorder cosmosclient.CosmosMessageClient) {
 	w.wsClientMu.Lock()
 	defer w.wsClientMu.Unlock()
+
+	enabled := os.Getenv("POW_WS_ENABLED")
+	if enabled != "" {
+		switch strings.ToLower(enabled) {
+		case "0", "false", "off", "no":
+			logging.Info("WebSocket. Disabled via POW_WS_ENABLED", types.PoC, "nodeId", w.nodeId)
+			return
+		}
+	}
 
 	if w.wsClient != nil {
 		logging.Warn("WebSocket. Client already started for node", types.PoC, "nodeId", w.nodeId)
