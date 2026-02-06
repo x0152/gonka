@@ -9,6 +9,7 @@ import (
 	"decentralized-api/logging"
 	"decentralized-api/utils"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"math/rand"
@@ -25,6 +26,8 @@ import (
 	"github.com/productscience/inference/cmd/inferenced/cmd"
 	"github.com/productscience/inference/x/inference/calculations"
 	"github.com/productscience/inference/x/inference/types"
+	"google.golang.org/grpc/codes"
+	grpcstatus "google.golang.org/grpc/status"
 )
 
 // AuthKeyContext represents the context in which an AuthKey was used
@@ -202,9 +205,18 @@ func cleanupExpiredAuthKeys(currentBlockHeight int64) {
 }
 
 func (s *Server) postChat(ctx echo.Context) error {
+	body, err := readRequestBody(ctx.Request(), ctx.Response().Writer)
+	if err != nil {
+		logging.Error("Unable to read request body", types.Server, "error", err)
+		return err
+	}
+	return s.postChatWithBody(ctx, body, utils.GenerateSHA256Hash(string(body)))
+}
+
+func (s *Server) postChatWithBody(ctx echo.Context, body []byte, signBodyHash string) error {
 	logging.Debug("PostChat. Received request", types.Inferences, "path", ctx.Request().URL.Path)
 
-	chatRequest, err := readRequest(ctx.Request(), ctx.Response().Writer, s.recorder.GetAccountAddress())
+	chatRequest, err := readRequest(ctx.Request(), s.recorder.GetAccountAddress(), body, signBodyHash)
 	if err != nil {
 		return err
 	}
@@ -296,7 +308,7 @@ func (s *Server) handleTransferRequest(ctx echo.Context, request *ChatRequest) e
 
 	promptText := ""
 	for _, message := range request.OpenAiRequest.Messages {
-		promptText += message.Content + "\n"
+		promptText += message.ContentText() + "\n"
 	}
 
 	promptTokenCount, err := s.getPromptTokenEstimation(promptText, request.OpenAiRequest.Model)
@@ -335,8 +347,11 @@ func (s *Server) handleTransferRequest(ctx echo.Context, request *ChatRequest) e
 
 	executor, err := s.getExecutorForRequest(ctx.Request().Context(), request.OpenAiRequest.Model)
 	if err != nil {
-		logging.Error("Failed to get executor", types.Inferences, "error", err)
-		return err
+		logging.Error("Failed to get executor", types.Inferences, "model", request.OpenAiRequest.Model, "error", err)
+		if st, ok := grpcstatus.FromError(err); ok && st.Code() == codes.NotFound {
+			return echo.NewHTTPError(http.StatusNotFound, "model not found")
+		}
+		return echo.NewHTTPError(http.StatusServiceUnavailable, "no executors available for model")
 	}
 
 	seed := rand.Int31()
@@ -503,7 +518,7 @@ func (s *Server) extractPromptTextFromRequest(requestBytes []byte) (string, erro
 
 	promptText := ""
 	for _, message := range openAiRequest.Messages {
-		promptText += message.Content + "\n"
+		promptText += message.ContentText() + "\n"
 	}
 	return promptText, nil
 }
@@ -565,6 +580,9 @@ func (s *Server) handleExecutorRequest(ctx echo.Context, request *ChatRequest, w
 	if err != nil {
 		logging.Error("Failed to get response from inference node", types.Inferences,
 			"inferenceId", inferenceId, "error", err)
+		if errors.Is(err, broker.ErrNoNodesAvailable) {
+			return echo.NewHTTPError(http.StatusServiceUnavailable, "no inference nodes available")
+		}
 		return err
 	}
 	defer resp.Body.Close()
@@ -923,16 +941,9 @@ func getInferenceErrorMessage(resp *http.Response) string {
 	}
 }
 
-func readRequest(request *http.Request, writer http.ResponseWriter, transferAddress string) (*ChatRequest, error) {
-	body, err := readRequestBody(request, writer)
-	if err != nil {
-		logging.Error("Unable to read request body", types.Server, "error", err)
-		return nil, err
-	}
-
+func readRequest(request *http.Request, transferAddress string, body []byte, signBodyHash string) (*ChatRequest, error) {
 	openAiRequest := OpenAiRequest{}
-	err = json.Unmarshal(body, &openAiRequest)
-	if err != nil {
+	if err := json.Unmarshal(body, &openAiRequest); err != nil {
 		return nil, err
 	}
 
@@ -956,6 +967,7 @@ func readRequest(request *http.Request, writer http.ResponseWriter, transferAddr
 		TransferAddress:   transferAddress,
 		TransferSignature: request.Header.Get(utils.XTASignatureHeader),
 		PromptHash:        request.Header.Get(utils.XPromptHashHeader),
+		SignBodyHash:      signBodyHash,
 	}, nil
 }
 

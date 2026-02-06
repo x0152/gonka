@@ -1,6 +1,7 @@
 package public
 
 import (
+	"encoding/json"
 	"net/http"
 
 	cryptotypes "github.com/cometbft/cometbft/proto/tendermint/crypto"
@@ -20,6 +21,7 @@ type ChatRequest struct {
 	Timestamp         int64  // timestamp of the request
 	TransferSignature string // signature of the transfer address
 	PromptHash        string
+	SignBodyHash      string
 }
 
 type OpenAiRequest struct {
@@ -31,7 +33,29 @@ type OpenAiRequest struct {
 }
 
 type Message struct {
-	Content string `json:"content"` // The content of the message
+	Role    string          `json:"role"`
+	Content json.RawMessage `json:"content"`
+}
+
+func (m Message) ContentText() string {
+	var s string
+	if json.Unmarshal(m.Content, &s) == nil {
+		return s
+	}
+	var parts []struct {
+		Type string `json:"type"`
+		Text string `json:"text"`
+	}
+	if json.Unmarshal(m.Content, &parts) == nil {
+		var text string
+		for _, p := range parts {
+			if p.Type == "text" {
+				text += p.Text
+			}
+		}
+		return text
+	}
+	return string(m.Content)
 }
 
 type ExecutorDestination struct {
