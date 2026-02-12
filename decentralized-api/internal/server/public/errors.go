@@ -10,6 +10,7 @@ var (
 	ErrRequestAuth                  = echo.NewHTTPError(http.StatusUnauthorized, "Authorization is required")
 	ErrInferenceParticipantNotFound = echo.NewHTTPError(http.StatusNotFound, "Inference participant not found")
 	ErrInsufficientBalance          = echo.NewHTTPError(http.StatusPaymentRequired, "Insufficient balance")
+	ErrUnsupportedMessageContent    = echo.NewHTTPError(http.StatusBadRequest, "Unsupported message content")
 
 	ErrIdRequired           = echo.NewHTTPError(http.StatusBadRequest, "Id is required")
 	ErrAddressRequired      = echo.NewHTTPError(http.StatusBadRequest, "Address is required")
