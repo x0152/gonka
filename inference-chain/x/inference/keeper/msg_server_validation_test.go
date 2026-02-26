@@ -45,6 +45,36 @@ func TestMsgServer_Validation(t *testing.T) {
 	require.Equal(t, types.InferenceStatus_VALIDATED, inference.Status)
 }
 
+func TestMsgServer_Validation_ConfidentialInferenceDenied(t *testing.T) {
+	inferenceHelper, k, ctx := NewMockInferenceHelper(t)
+	createParticipants(t, inferenceHelper.MessageServer, ctx)
+
+	model := &types.Model{Id: MODEL_ID, ValidationThreshold: &types.Decimal{Value: 85, Exponent: -2}}
+	k.SetModel(ctx, model)
+	StubModelSubgroup(t, ctx, k, inferenceHelper.Mocks, model)
+	addMembersToGroupData(k, ctx)
+
+	expected, err := inferenceHelper.StartInference("promptPayload", model.Id, time.Now().UnixNano(), calculations.DefaultMaxTokens)
+	require.NoError(t, err)
+	_, err = inferenceHelper.FinishInferenceWithResponsePayload("tee-confidential-v1")
+	require.NoError(t, err)
+
+	saved, found := k.GetInference(ctx, expected.InferenceId)
+	require.True(t, found)
+	require.Equal(t, "tee", saved.NodeVersion)
+
+	_, err = inferenceHelper.MessageServer.Validation(ctx, &types.MsgValidation{
+		InferenceId:  expected.InferenceId,
+		Creator:      testutil.Validator,
+		ValueDecimal: types.DecimalFromFloat(0.9999),
+	})
+	require.ErrorIs(t, err, types.ErrConfidentialInferenceValidationDenied)
+
+	saved, found = k.GetInference(ctx, expected.InferenceId)
+	require.True(t, found)
+	require.Equal(t, types.InferenceStatus_FINISHED, saved.Status)
+}
+
 func createParticipants(t *testing.T, ms types.MsgServer, ctx context.Context) {
 	mockRequester := NewMockAccount(testutil.Requester)
 	mockExecutor := NewMockAccount(testutil.Executor)

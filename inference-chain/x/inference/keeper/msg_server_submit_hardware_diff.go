@@ -4,7 +4,9 @@ import (
 	"context"
 	"strings"
 
+	errorsmod "cosmossdk.io/errors"
 	sdk "github.com/cosmos/cosmos-sdk/types"
+	sdkerrors "github.com/cosmos/cosmos-sdk/types/errors"
 	"github.com/productscience/inference/x/inference/types"
 	"golang.org/x/exp/slices"
 )
@@ -12,7 +14,7 @@ import (
 func (k msgServer) SubmitHardwareDiff(goCtx context.Context, msg *types.MsgSubmitHardwareDiff) (*types.MsgSubmitHardwareDiffResponse, error) {
 	ctx := sdk.UnwrapSDKContext(goCtx)
 
-	_, found := k.GetParticipant(goCtx, msg.Creator)
+	participant, found := k.GetParticipant(goCtx, msg.Creator)
 	if !found {
 		return nil, types.ErrParticipantNotFound
 	}
@@ -34,6 +36,17 @@ func (k msgServer) SubmitHardwareDiff(goCtx context.Context, msg *types.MsgSubmi
 
 	// Make sure that before the update, we have models in the state
 	for _, node := range msg.NewOrModified {
+		if err := ValidateTEENode(node); err != nil {
+			return nil, errorsmod.Wrapf(sdkerrors.ErrInvalidRequest, "%v", err)
+		}
+		if IsTEENode(node) && strings.TrimSpace(participant.WorkerPublicKey) == "" {
+			return nil, errorsmod.Wrapf(
+				sdkerrors.ErrInvalidRequest,
+				"participant %s must provide worker_key before registering tee node %s",
+				msg.Creator,
+				safeLocalID(node),
+			)
+		}
 
 		for _, modelId := range node.Models {
 			if !k.IsValidGovernanceModel(ctx, modelId) {
@@ -80,4 +93,14 @@ func (k msgServer) SubmitHardwareDiff(goCtx context.Context, msg *types.MsgSubmi
 	}
 
 	return &types.MsgSubmitHardwareDiffResponse{}, nil
+}
+
+func safeLocalID(node *types.HardwareNode) string {
+	if node == nil {
+		return "<nil>"
+	}
+	if strings.TrimSpace(node.LocalId) == "" {
+		return "<empty>"
+	}
+	return node.LocalId
 }

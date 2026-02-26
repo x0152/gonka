@@ -217,3 +217,66 @@ func TestMsgServer_SubmitHardwareDiff_RemoveAll(t *testing.T) {
 	require.True(t, found)
 	require.Equal(t, 0, len(hardwareNodes.HardwareNodes))
 }
+
+func TestMsgServer_SubmitHardwareDiff_TEERequiresWorkerKey(t *testing.T) {
+	k, ms, ctx := setupMsgServer(t)
+
+	mockCreator := NewMockAccount(testutil.Creator)
+	MustAddParticipant(t, ms, ctx, *mockCreator)
+	registerTestModels(t, k, ms, sdk.UnwrapSDKContext(ctx), "model-tee")
+
+	teeNode := &types.HardwareNode{
+		LocalId: "tee-node-1",
+		Status:  types.HardwareNodeStatus_INFERENCE,
+		Models:  []string{"model-tee"},
+		Hardware: []*types.Hardware{
+			{Type: "TEE", Count: 1},
+		},
+		Host: "tee-node.internal",
+		Port: "18180",
+	}
+
+	_, err := ms.SubmitHardwareDiff(ctx, &types.MsgSubmitHardwareDiff{
+		Creator:       testutil.Creator,
+		NewOrModified: []*types.HardwareNode{teeNode},
+		Removed:       []*types.HardwareNode{},
+	})
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "worker_key")
+}
+
+func TestMsgServer_SubmitHardwareDiff_TEEInvalidPort(t *testing.T) {
+	k, ms, ctx := setupMsgServer(t)
+
+	mockCreator := NewMockAccount(testutil.Creator)
+	MustAddParticipant(t, ms, ctx, *mockCreator)
+	registerTestModels(t, k, ms, sdk.UnwrapSDKContext(ctx), "model-tee")
+
+	// Update participant and set worker key (required for TEE registration).
+	_, err := ms.SubmitNewParticipant(ctx, &types.MsgSubmitNewParticipant{
+		Creator:      testutil.Creator,
+		Url:          "https://participant.gonka.test",
+		ValidatorKey: mockCreator.GetPubKey().String(),
+		WorkerKey:    "tee-worker-public-key",
+	})
+	require.NoError(t, err)
+
+	teeNode := &types.HardwareNode{
+		LocalId: "tee-node-1",
+		Status:  types.HardwareNodeStatus_INFERENCE,
+		Models:  []string{"model-tee"},
+		Hardware: []*types.Hardware{
+			{Type: "TEE", Count: 1},
+		},
+		Host: "tee-node.internal",
+		Port: "bad-port",
+	}
+
+	_, err = ms.SubmitHardwareDiff(ctx, &types.MsgSubmitHardwareDiff{
+		Creator:       testutil.Creator,
+		NewOrModified: []*types.HardwareNode{teeNode},
+		Removed:       []*types.HardwareNode{},
+	})
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "invalid port")
+}

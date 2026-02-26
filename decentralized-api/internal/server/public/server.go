@@ -35,6 +35,7 @@ type Server struct {
 	artifactStore       *artifacts.ManagedArtifactStore
 	authzCache          *authzcache.AuthzCache
 	httpClient          *http.Client
+	teeSessions         *teeSessionStore
 }
 
 // ServerOption configures optional Server dependencies.
@@ -75,6 +76,7 @@ func NewServer(
 		epochGroupDataCache: internal.NewEpochGroupDataCache(recorder),
 		authzCache:          authzcache.NewAuthzCache(recorder),
 		httpClient:          NewNoRedirectClient(httpClientTimeout),
+		teeSessions:         newTEESessionStore(),
 	}
 
 	for _, opt := range opts {
@@ -115,6 +117,12 @@ func NewServer(
 	g.GET("debug/verify/:height", s.debugVerify)
 
 	g.GET("versions", s.getVersions)
+
+	// TEE relay endpoints (encrypted payloads are never decrypted in dAPI)
+	g.POST("tee/sessions/reserve", s.postTeeReserveSession)
+	g.POST("tee/chat/completions", s.postTeeChatCompletions)
+	g.POST("tee/executor/chat/completions", s.postTeeExecutorChatCompletions)
+	g.POST("tee/sessions/close", s.postTeeCloseSession)
 
 	g.GET("bridge/status", s.getBridgeStatus)
 	g.GET("bridge/addresses", s.getBridgeAddresses)

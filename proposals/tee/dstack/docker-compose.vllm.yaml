@@ -1,0 +1,19 @@
+services:
+  vllm:
+    image: vllm/vllm-openai:latest
+    command:
+      - --model
+      - Qwen/Qwen2.5-7B-Instruct
+      - --host
+      - 0.0.0.0
+      - --port
+      - "8000"
+    runtime: nvidia
+    ports:
+      - "8000:8000"
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              capabilities: [gpu]

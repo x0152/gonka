@@ -158,6 +158,78 @@ func TestMsgServer_FinishInference(t *testing.T) {
 
 }
 
+func TestMsgServer_FinishInference_TEEInferenceSkipsExternalValidation(t *testing.T) {
+	inferenceHelper, k, ctx := NewMockInferenceHelper(t)
+
+	requestTimestamp := inferenceHelper.context.BlockTime().UnixNano()
+	ctx, err := advanceEpoch(ctx, &k, inferenceHelper.Mocks, int64(10), 1)
+	require.NoError(t, err)
+	inferenceHelper.context = ctx
+
+	modelID := "model-tee"
+	model := types.Model{Id: modelID}
+	k.SetModel(ctx, &model)
+
+	started, err := inferenceHelper.StartInference(
+		"promptPayload",
+		modelID,
+		requestTimestamp,
+		calculations.DefaultMaxTokens,
+	)
+	require.NoError(t, err)
+
+	saved, found := k.GetInference(ctx, started.InferenceId)
+	require.True(t, found)
+	saved.NodeVersion = "tee:v1"
+	require.NoError(t, k.SetInference(ctx, saved))
+	inferenceHelper.previousInference.NodeVersion = "tee:v1"
+
+	StubModelSubgroup(t, ctx, k, inferenceHelper.Mocks, &model)
+
+	_, err = inferenceHelper.FinishInference()
+	require.NoError(t, err)
+
+	saved, found = k.GetInference(ctx, started.InferenceId)
+	require.True(t, found)
+	require.NotZero(t, saved.EpochId)
+
+	details := k.GetInferenceValidationDetailsForEpoch(ctx, saved.EpochId)
+	require.Empty(t, details)
+}
+
+func TestMsgServer_FinishInference_TEEMarkerSkipsValidationWhenNodeVersionMissing(t *testing.T) {
+	inferenceHelper, k, ctx := NewMockInferenceHelper(t)
+
+	requestTimestamp := inferenceHelper.context.BlockTime().UnixNano()
+	ctx, err := advanceEpoch(ctx, &k, inferenceHelper.Mocks, int64(10), 1)
+	require.NoError(t, err)
+	inferenceHelper.context = ctx
+
+	modelID := "model-tee"
+	model := types.Model{Id: modelID}
+	k.SetModel(ctx, &model)
+
+	started, err := inferenceHelper.StartInference(
+		"promptPayload",
+		modelID,
+		requestTimestamp,
+		calculations.DefaultMaxTokens,
+	)
+	require.NoError(t, err)
+
+	StubModelSubgroup(t, ctx, k, inferenceHelper.Mocks, &model)
+
+	_, err = inferenceHelper.FinishInferenceWithResponsePayload("tee-confidential-v1")
+	require.NoError(t, err)
+
+	saved, found := k.GetInference(ctx, started.InferenceId)
+	require.True(t, found)
+	require.Equal(t, "tee", saved.NodeVersion)
+
+	details := k.GetInferenceValidationDetailsForEpoch(ctx, saved.EpochId)
+	require.Empty(t, details)
+}
+
 func MustAddParticipant(t *testing.T, ms types.MsgServer, ctx context.Context, mockAccount MockAccount) {
 	_, err := ms.SubmitNewParticipant(ctx, &types.MsgSubmitNewParticipant{
 		Creator:      mockAccount.address,
@@ -330,6 +402,10 @@ func (h *MockInferenceHelper) StartInference(
 }
 
 func (h *MockInferenceHelper) FinishInference() (*types.Inference, error) {
+	return h.FinishInferenceWithResponsePayload("responsePayload")
+}
+
+func (h *MockInferenceHelper) FinishInferenceWithResponsePayload(responsePayload string) (*types.Inference, error) {
 	if h.previousInference == nil {
 		return nil, types.ErrInferenceNotFound
 	}
@@ -375,7 +451,7 @@ func (h *MockInferenceHelper) FinishInference() (*types.Inference, error) {
 	_, err = h.MessageServer.FinishInference(h.context, &types.MsgFinishInference{
 		InferenceId:          inferenceId,
 		ResponseHash:         "responseHash",
-		ResponsePayload:      "responsePayload",
+		ResponsePayload:      responsePayload,
 		PromptTokenCount:     10,
 		CompletionTokenCount: 20,
 		ExecutedBy:           h.MockExecutor.address,

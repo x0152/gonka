@@ -2,6 +2,7 @@ package keeper
 
 import (
 	"context"
+	"strings"
 
 	sdkerrors "cosmossdk.io/errors"
 	"cosmossdk.io/math"
@@ -9,6 +10,9 @@ import (
 	"github.com/productscience/inference/x/inference/calculations"
 	"github.com/productscience/inference/x/inference/types"
 )
+
+const teeInferenceNodeVersionPrefix = "tee:"
+const teeConfidentialFinishMarker = "tee-confidential-v1"
 
 func (k msgServer) FinishInference(goCtx context.Context, msg *types.MsgFinishInference) (*types.MsgFinishInferenceResponse, error) {
 	ctx := sdk.UnwrapSDKContext(goCtx)
@@ -104,6 +108,9 @@ func (k msgServer) FinishInference(goCtx context.Context, msg *types.MsgFinishIn
 	finalInference, err := k.processInferencePayments(ctx, inference, payments, true)
 	if err != nil {
 		return failedFinish(ctx, err, msg), nil
+	}
+	if isConfidentialFinishMessage(msg) && strings.TrimSpace(finalInference.NodeVersion) == "" {
+		finalInference.NodeVersion = "tee"
 	}
 	err = k.SetInference(ctx, *finalInference)
 	if err != nil {
@@ -251,6 +258,16 @@ func (k msgServer) handleInferenceCompleted(ctx sdk.Context, existingInference *
 
 	existingInference.EpochPocStartBlockHeight = uint64(effectiveEpoch.PocStartBlockHeight)
 	existingInference.EpochId = effectiveEpoch.Index
+
+	if shouldSkipExternalValidation(existingInference) {
+		k.LogInfo("Skipping external validation for confidential inference", types.Validation,
+			"inference_id", existingInference.InferenceId,
+			"node_version", existingInference.NodeVersion,
+			"executor_id", existingInference.ExecutedBy,
+		)
+		return k.SetInference(ctx, *existingInference)
+	}
+
 	currentEpochGroup.GroupData.NumberOfRequests++
 
 	executorPower := uint64(0)
@@ -308,4 +325,19 @@ func (k msgServer) handleInferenceCompleted(ctx sdk.Context, existingInference *
 	}
 	k.SetEpochGroupData(ctx, *currentEpochGroup.GroupData)
 	return nil
+}
+
+func shouldSkipExternalValidation(inference *types.Inference) bool {
+	if inference == nil {
+		return false
+	}
+	nodeVersion := strings.ToLower(strings.TrimSpace(inference.NodeVersion))
+	return nodeVersion == "tee" || strings.HasPrefix(nodeVersion, teeInferenceNodeVersionPrefix)
+}
+
+func isConfidentialFinishMessage(msg *types.MsgFinishInference) bool {
+	if msg == nil {
+		return false
+	}
+	return strings.EqualFold(strings.TrimSpace(msg.ResponsePayload), teeConfidentialFinishMarker)
 }

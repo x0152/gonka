@@ -35,6 +35,14 @@ func (k msgServer) Validation(goCtx context.Context, msg *types.MsgValidation) (
 		k.LogError("Inference not found", types.Validation, "inferenceId", msg.InferenceId)
 		return nil, types.ErrInferenceNotFound
 	}
+	if shouldSkipExternalValidation(&inference) {
+		k.LogWarn("Validation rejected for confidential inference", types.Validation,
+			"inferenceId", msg.InferenceId,
+			"creator", msg.Creator,
+			"node_version", inference.NodeVersion,
+		)
+		return nil, types.ErrConfidentialInferenceValidationDenied
+	}
 
 	if !msg.Revalidation {
 		err := k.addInferenceToEpochGroupValidations(ctx, msg, inference)
