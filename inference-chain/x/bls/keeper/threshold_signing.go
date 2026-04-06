@@ -37,7 +37,24 @@ func (k Keeper) RequestThresholdSignature(ctx sdk.Context, signingData types.Sig
 		return fmt.Errorf("failed to check request uniqueness: %w", err)
 	}
 	if existingValue != nil {
-		return fmt.Errorf("request_id already exists: %x", signingData.RequestId)
+		var existing types.ThresholdSigningRequest
+		if err := k.cdc.Unmarshal(existingValue, &existing); err != nil {
+			return fmt.Errorf("failed to unmarshal existing threshold signing request: %w", err)
+		}
+
+		// Allow retry only after terminal no-signature outcomes
+		if existing.Status != types.ThresholdSigningStatus_THRESHOLD_SIGNING_STATUS_FAILED &&
+			existing.Status != types.ThresholdSigningStatus_THRESHOLD_SIGNING_STATUS_EXPIRED {
+			return fmt.Errorf("request_id already exists: %x (status: %s)", signingData.RequestId, existing.Status.String())
+		}
+
+		k.Logger().Info("Retrying threshold signing request after failed attempt",
+			"request_id", fmt.Sprintf("%x", signingData.RequestId),
+			"previous_status", existing.Status.String(),
+			"previous_deadline_block_height", existing.DeadlineBlockHeight)
+
+		// Defense-in-depth cleanup in case a stale expiration index entry remains
+		k.removeFromExpirationIndex(ctx, existing.DeadlineBlockHeight, signingData.RequestId)
 	}
 
 	// Encode data using Ethereum-compatible abi.encodePacked format
@@ -325,6 +342,11 @@ func (k Keeper) checkThresholdAndAggregate(ctx sdk.Context, request *types.Thres
 		// Remove from expiration index since it's no longer collecting signatures
 		k.removeFromExpirationIndex(ctx, request.DeadlineBlockHeight, request.RequestId)
 
+		// Persist terminal state before event emission
+		if storeErr := k.storeThresholdSigningRequest(ctx, request); storeErr != nil {
+			return storeErr
+		}
+
 		return k.emitThresholdSigningFailed(ctx, request.RequestId, request.CurrentEpochId,
 			fmt.Sprintf("signature aggregation failed: %v", err))
 	}
@@ -335,6 +357,11 @@ func (k Keeper) checkThresholdAndAggregate(ctx sdk.Context, request *types.Thres
 
 	// Remove from expiration index since it's no longer collecting signatures
 	k.removeFromExpirationIndex(ctx, request.DeadlineBlockHeight, request.RequestId)
+
+	// Persist terminal state before event emission
+	if err := k.storeThresholdSigningRequest(ctx, request); err != nil {
+		return err
+	}
 
 	// Emit completion event
 	return k.emitThresholdSigningCompleted(ctx, request.RequestId, request.CurrentEpochId,
@@ -375,6 +402,11 @@ func (k Keeper) emitThresholdSigningCompleted(ctx sdk.Context, requestID []byte,
 
 // emitThresholdSigningFailed emits failure event
 func (k Keeper) emitThresholdSigningFailed(ctx sdk.Context, requestID []byte, epochID uint64, reason string) error {
+	k.Logger().Error("Threshold signing failed",
+		"request_id", fmt.Sprintf("%x", requestID),
+		"current_epoch_id", epochID,
+		"reason", reason)
+
 	return ctx.EventManager().EmitTypedEvent(&types.EventThresholdSigningFailed{
 		RequestId:      requestID,
 		CurrentEpochId: epochID,
