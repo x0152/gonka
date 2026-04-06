@@ -82,6 +82,7 @@ type (
 		// Bridge & Wrapped Token collections
 		BridgeContractAddresses        collections.Map[collections.Pair[string, string], types.BridgeContractAddress]
 		BridgeTransactionsMap          collections.Map[collections.Triple[string, string, string], types.BridgeTransaction]
+		BridgeMintRefundsMap          collections.Map[string, types.MsgRequestBridgeMint]
 		WrappedTokenCodeIDItem         collections.Item[uint64]
 		WrappedTokenMetadataMap        collections.Map[collections.Pair[string, string], types.BridgeTokenMetadata]
 		WrappedTokenContractsMap       collections.Map[collections.Pair[string, string], types.BridgeWrappedTokenContract]
@@ -409,6 +410,13 @@ func NewKeeper(
 			"bridge_transactions",
 			collections.TripleKeyCodec(collections.StringKey, collections.StringKey, collections.StringKey),
 			codec.CollValue[types.BridgeTransaction](cdc),
+		),
+		BridgeMintRefundsMap: collections.NewMap(
+			sb,
+			types.BridgeMintRefundsPrefix,
+			"bridge_mint_refunds",
+			collections.StringKey,
+			codec.CollValue[types.MsgRequestBridgeMint](cdc),
 		),
 		WrappedTokenMetadataMap: collections.NewMap(
 			sb,

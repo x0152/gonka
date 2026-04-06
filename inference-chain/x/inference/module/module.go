@@ -338,6 +338,10 @@ func (am AppModule) EndBlock(ctx context.Context) error {
 		// Don't return error - allow block processing to continue
 	}
 
+	if err := am.keeper.ProcessBridgeMintRefunds(ctx); err != nil {
+		am.LogError("Failed to process bridge mint refunds", types.Messages, "error", err)
+	}
+
 	params, err := am.keeper.GetParams(ctx)
 	if err != nil {
 		am.LogError("Unable to get parameters", types.Settle, "error", err.Error())
