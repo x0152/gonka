@@ -75,6 +75,7 @@ type OnNewBlockDispatcher struct {
 	validator            *validation.InferenceValidator
 	epochGroupDataCache  *internal.EpochGroupDataCache
 	availability         *devshardpkg.AvailabilityTracker
+	setQueryCacheHint    func(int64)
 }
 
 // StatusResponse matches the structure expected by getStatus function
@@ -163,6 +164,7 @@ func NewOnNewBlockDispatcherFromCosmosClient(
 		validator,
 	)
 	dispatcher.epochGroupDataCache = epochGroupDataCache
+	dispatcher.setQueryCacheHint = cosmosClient.SetQueryCacheHeightHint
 	return dispatcher
 }
 
@@ -176,7 +178,7 @@ func (d *OnNewBlockDispatcher) ProcessNewBlock(ctx context.Context, blockInfo ch
 		"height", blockInfo.Height,
 		"hash", blockInfo.Hash)
 
-	// 1. Query network for current state (sync status, epoch params)
+	// 1. Query network for current state (sync status, epoch params).
 	networkInfo, err := d.queryNetworkInfo(ctx)
 	if err != nil {
 		logging.Error("Failed to query network info, skipping block processing", types.Stages,
@@ -184,9 +186,17 @@ func (d *OnNewBlockDispatcher) ProcessNewBlock(ctx context.Context, blockInfo ch
 		return err // Skip processing this block
 	}
 
+	blockCtx := ctx
+	if networkInfo.BlockHeight > 0 {
+		if d.setQueryCacheHint != nil {
+			d.setQueryCacheHint(networkInfo.BlockHeight)
+		}
+		blockCtx = cosmosclient.PinHeight(ctx, networkInfo.BlockHeight)
+	}
+
 	// Fetch validation parameters - skip in tests
 	if d.configManager != nil && !strings.HasPrefix(blockInfo.Hash, "hash-") { // Skip in tests where hash has format "hash-N"
-		params, err := d.queryClient.Params(ctx, &types.QueryParamsRequest{})
+		params, err := d.queryClient.Params(blockCtx, &types.QueryParamsRequest{})
 		if err != nil {
 			logging.Error("Failed to get params", types.Validation, "error", err)
 		} else {
@@ -337,12 +347,22 @@ func (d *OnNewBlockDispatcher) queryNetworkInfo(ctx context.Context) (NetworkInf
 	if err != nil {
 		return NetworkInfo{}, err
 	}
+	if status == nil {
+		return NetworkInfo{}, errors.New("empty status response")
+	}
 	isSynced := !status.SyncInfo.CatchingUp
 
-	epochInfo, err := d.queryClient.EpochInfo(ctx, &types.QueryEpochInfoRequest{})
-	if err != nil || epochInfo == nil {
+	queryCtx := cosmosclient.WithoutQueryCache(ctx)
+	epochInfo, err := d.queryClient.EpochInfo(queryCtx, &types.QueryEpochInfoRequest{})
+	if err != nil {
 		logging.Error("Failed to query epoch info", types.Stages, "error", err)
 		return NetworkInfo{}, err
+	}
+	if epochInfo == nil {
+		return NetworkInfo{}, errors.New("query epoch info returned nil response")
+	}
+	if epochInfo.Params.EpochParams == nil {
+		return NetworkInfo{}, errors.New("query epoch info returned empty epoch params")
 	}
 
 	// Extract confirmation PoC event if active
