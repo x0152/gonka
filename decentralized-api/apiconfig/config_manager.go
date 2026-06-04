@@ -525,6 +525,16 @@ func readConfig(provider koanf.Provider) (Config, error) {
 			log.Fatalf("error setting default chain_node.query_cache_enabled: %v", err)
 		}
 	}
+	if !k.Exists("chain_node.query_cache_max_entries") {
+		if err := k.Set("chain_node.query_cache_max_entries", 10000); err != nil {
+			log.Fatalf("error setting default chain_node.query_cache_max_entries: %v", err)
+		}
+	}
+	if !k.Exists("chain_node.query_cache_max_bytes") {
+		if err := k.Set("chain_node.query_cache_max_bytes", int64(64<<20)); err != nil {
+			log.Fatalf("error setting default chain_node.query_cache_max_bytes: %v", err)
+		}
+	}
 	var config Config
 	err = k.Unmarshal("", &config)
 	if err != nil {
