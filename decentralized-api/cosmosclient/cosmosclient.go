@@ -335,10 +335,11 @@ func (icc *InferenceCosmosClient) ResetQueryCacheStats() bool {
 }
 
 func (icc *InferenceCosmosClient) cachedConn() grpc.ClientConnInterface {
+	baseConn := grpc.ClientConnInterface(icc.manager.GetClientContext())
 	if icc.queryCache != nil {
-		return &CachingConn{inner: icc.manager.GetClientContext(), cache: icc.queryCache}
+		baseConn = &CachingConn{inner: baseConn, cache: icc.queryCache}
 	}
-	return icc.manager.GetClientContext()
+	return newObservedQueryClientConn(baseConn)
 }
 
 func (icc *InferenceCosmosClient) GetClientContext() sdkclient.Context {
