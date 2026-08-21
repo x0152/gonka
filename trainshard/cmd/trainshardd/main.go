@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log/slog"
 	"net/http"
 	"os"
 	"os/signal"
@@ -17,10 +18,14 @@ import (
 	"trainshard/internal/application/hostd/session"
 	"trainshard/internal/domain/mesh"
 	"trainshard/internal/domain/run"
+	"trainshard/internal/domain/shard"
 	"trainshard/internal/domain/shared/vo"
+	"trainshard/internal/infrastructure/adapters/chain"
 	chainfake "trainshard/internal/infrastructure/adapters/chain/fake"
 	clockadapter "trainshard/internal/infrastructure/adapters/clock"
+	"trainshard/internal/infrastructure/adapters/dapi"
 	nodemanagerfake "trainshard/internal/infrastructure/adapters/nodemanager/fake"
+	"trainshard/internal/infrastructure/adapters/signing/cosmos"
 	"trainshard/internal/infrastructure/adapters/signing/hmac"
 	"trainshard/internal/infrastructure/repositories/localstate"
 	"trainshard/internal/utils/httpx"
@@ -53,10 +58,20 @@ func serve() error {
 	log := logger.New(os.Stdout, cfg.logLevel, cfg.logFormat)
 	clock := clockadapter.System{}
 
-	chain, err := loadChain(cfg, clock)
+	signer, err := key(cfg)
 	if err != nil {
 		return err
 	}
+	if signer.Address() != vo.Address(cfg.participant) {
+		return fmt.Errorf("the key signs as %s and this daemon speaks for %s: a node's mesh identity is only believed from its own participant", signer.Address(), cfg.participant)
+	}
+
+	outside, err := connect(cfg, clock, log)
+	if err != nil {
+		return err
+	}
+	defer outside.close()
+
 	state, err := localstate.New(cfg.stateDir)
 	if err != nil {
 		return err
@@ -66,12 +81,6 @@ func serve() error {
 	if err != nil {
 		return err
 	}
-	nodeManager := nodemanagerfake.New(log)
-	signer := hmac.New(cfg.secret, vo.Address(cfg.participant))
-
-	if cfg.machine != "memory" {
-		log.Warn("the chain, the node manager and the signer are stand-ins: this daemon reserves nothing, releases nothing, stops no inference, and anyone holding the shared secret can sign as any actor")
-	}
 
 	runs := hostdrun.New(hostdrun.Config{
 		Participant: cfg.participant,
@@ -80,10 +89,10 @@ func serve() error {
 		Interval:    cfg.reconcileInterval,
 		Patience:    cfg.prepareDeadline,
 	}, hostdrun.Deps{
-		Chain:        chain,
-		Reservations: chain,
-		Submitter:    chain,
-		Watcher:      chain,
+		Chain:        outside.chain,
+		Reservations: outside.reservations,
+		Submitter:    outside.submitter,
+		Watcher:      outside.watcher,
 		Runs:         state.Runs(),
 		Requests:     state.Requests(clock, cfg.requestTTL),
 		Store:        state.Mesh(),
@@ -95,7 +104,7 @@ func serve() error {
 			GPU:        parts.gpu,
 			Mesh:       mesh.Runtime{Network: parts.network, Store: state.Mesh(), Attestor: signer},
 			Egress:     parts.egress,
-			Control:    nodeManager,
+			Control:    outside.control,
 			Runs:       state.Runs(),
 			Clock:      clock,
 			StopGrace:  cfg.stopGrace,
@@ -114,13 +123,13 @@ func serve() error {
 	}, node.Deps{
 		Probe:     parts.probe,
 		GPU:       parts.gpu,
-		Chain:     chain,
-		Submitter: chain,
+		Chain:     outside.chain,
+		Submitter: outside.submitter,
 		Log:       log,
 	})
 
 	sessions := session.New(session.Config{Participant: cfg.participant, Window: cfg.signatureWindow}, session.Deps{
-		Chain:    chain,
+		Chain:    outside.chain,
 		Streams:  parts.streams,
 		Volumes:  parts.volumes,
 		Sessions: state.Sessions(),
@@ -176,7 +185,79 @@ func serve() error {
 	return err
 }
 
-func loadChain(cfg config, clock clockadapter.System) (*chainfake.Chain, error) {
+// keys signs as this participant and names whoever signed what reaches us
+type keys interface {
+	Address() vo.Address
+	Sign(payload []byte) []byte
+	Attest(ctx context.Context, payload []byte) ([]byte, error)
+	Recover(payload, signature []byte) (vo.Address, error)
+}
+
+func key(cfg config) (keys, error) {
+	switch {
+	case cfg.privateKey != "":
+		return cosmos.FromHex(cfg.privateKey)
+	case cfg.keyName != "":
+		return cosmos.FromKeyring(cfg.keyringDir, cfg.keyringBackend, cfg.keyringPassword, cfg.keyName)
+	default:
+		return hmac.New(cfg.secret, vo.Address(cfg.participant)), nil
+	}
+}
+
+// outside is everything this daemon does not decide for itself: what the chain reserves, and the
+// dapi that signs for it and owns the node it takes out of inference
+type outside struct {
+	chain        shard.ChainReader
+	watcher      shard.ChainWatcher
+	submitter    shard.ChainSubmitter
+	reservations run.Reservations
+	control      run.NodeControl
+	close        func() error
+}
+
+// reservations reads from the chain and writes through the dapi, because a release is a transaction
+// and this machine holds no key
+type reservations struct {
+	*chain.Client
+	dapi *dapi.Client
+}
+
+func (r reservations) Release(ctx context.Context, shardID vo.ShardID, node vo.NodeRef, reason vo.ReleaseReason) error {
+	return r.dapi.Release(ctx, shardID, node, reason)
+}
+
+func connect(cfg config, clock clockadapter.System, log *slog.Logger) (outside, error) {
+	if cfg.chainGRPC == "" {
+		made, err := loadFakeChain(cfg, clock)
+		if err != nil {
+			return outside{}, err
+		}
+		log.Warn("no chain and no dapi: this daemon reserves nothing, releases nothing and stops no inference")
+		return outside{
+			chain: made, watcher: made, submitter: made, reservations: made,
+			control: nodemanagerfake.New(log),
+			close:   func() error { return nil },
+		}, nil
+	}
+
+	client, err := chain.Dial(chain.Config{Address: cfg.chainGRPC, Poll: cfg.chainPoll})
+	if err != nil {
+		return outside{}, err
+	}
+	node := dapi.New(&http.Client{}, dapi.Config{
+		Address:     cfg.dapiAddress,
+		Participant: cfg.participant,
+		Timeout:     cfg.dapiTimeout,
+	})
+	return outside{
+		chain: client, watcher: client, submitter: node,
+		reservations: reservations{Client: client, dapi: node},
+		control:      node,
+		close:        client.Close,
+	}, nil
+}
+
+func loadFakeChain(cfg config, clock clockadapter.System) (*chainfake.Chain, error) {
 	if cfg.chainSeed == "" {
 		return chainfake.New(clock), nil
 	}

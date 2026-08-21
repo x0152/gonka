@@ -12,11 +12,18 @@ import (
 )
 
 type config struct {
-	actor     vo.Address
-	secret    []byte
-	chainSeed string
-	directory hosts.Directory
-	timeout   time.Duration
+	actor           vo.Address
+	secret          []byte
+	privateKey      string
+	keyringDir      string
+	keyringBackend  string
+	keyringPassword string
+	keyName         string
+	chainGRPC       string
+	chainID         string
+	chainSeed       string
+	directory       hosts.Directory
+	timeout         time.Duration
 
 	pollInterval time.Duration
 	settleWindow time.Duration
@@ -24,11 +31,18 @@ type config struct {
 
 func load() (config, error) {
 	cfg := config{
-		actor:        vo.Address(env("ACTOR", "")),
-		secret:       []byte(env("SHARED_SECRET", "")),
-		chainSeed:    env("CHAIN_SEED", ""),
-		pollInterval: 10 * time.Second,
-		settleWindow: 2 * time.Minute,
+		actor:           vo.Address(env("ACTOR", "")),
+		secret:          []byte(env("SHARED_SECRET", "")),
+		privateKey:      env("PRIVATE_KEY", ""),
+		keyringDir:      env("KEYRING_DIR", ""),
+		keyringBackend:  env("KEYRING_BACKEND", "file"),
+		keyringPassword: env("KEYRING_PASSWORD", ""),
+		keyName:         env("KEY_NAME", ""),
+		chainGRPC:       env("CHAIN_GRPC", ""),
+		chainID:         env("CHAIN_ID", "prod-sim"),
+		chainSeed:       env("CHAIN_SEED", ""),
+		pollInterval:    10 * time.Second,
+		settleWindow:    2 * time.Minute,
 	}
 
 	directory, err := loadDirectory(env("HOSTS", ""))
@@ -43,15 +57,18 @@ func load() (config, error) {
 	}
 	cfg.timeout = timeout
 
+	signed := cfg.privateKey != "" || cfg.keyName != ""
 	switch {
-	case cfg.actor == "":
-		return config{}, fmt.Errorf("TRAINSHARDCTL_ACTOR is required, it is the address the shard was created from")
-	case len(cfg.secret) == 0:
-		return config{}, fmt.Errorf("TRAINSHARDCTL_SHARED_SECRET is required")
+	case !signed && len(cfg.secret) == 0:
+		return config{}, fmt.Errorf("TRAINSHARDCTL_PRIVATE_KEY is required, it is the key the shard was created from")
+	case !signed && cfg.actor == "":
+		return config{}, fmt.Errorf("TRAINSHARDCTL_ACTOR is required with a shared secret, it is the address the shard was created from")
 	case len(cfg.directory) == 0:
 		return config{}, fmt.Errorf("TRAINSHARDCTL_HOSTS is required, it is a json file of participant to host url")
-	case cfg.chainSeed == "":
-		return config{}, fmt.Errorf("TRAINSHARDCTL_CHAIN_SEED is required until the chain client lands")
+	case cfg.chainGRPC == "" && cfg.chainSeed == "":
+		return config{}, fmt.Errorf("TRAINSHARDCTL_CHAIN_GRPC is required, it is the chain that says what the shard reserves")
+	case cfg.chainGRPC != "" && !signed:
+		return config{}, fmt.Errorf("a shared secret signs nothing the chain accepts: set TRAINSHARDCTL_PRIVATE_KEY to drive a run against a real chain")
 	}
 	return cfg, nil
 }

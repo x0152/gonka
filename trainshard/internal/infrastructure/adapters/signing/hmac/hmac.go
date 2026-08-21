@@ -25,6 +25,8 @@ func New(secret []byte, address vo.Address) *Shared {
 	return &Shared{secret: secret, address: address}
 }
 
+func (s *Shared) Address() vo.Address { return s.address }
+
 func (s *Shared) Sign(payload []byte) []byte {
 	signature := append([]byte(s.address), separator)
 	return append(signature, s.mac(s.address, payload)...)

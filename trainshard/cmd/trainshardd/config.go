@@ -36,6 +36,13 @@ type config struct {
 	meshPorts        int
 	meshKeyDir       string
 	deniedCIDRs      []string
+	chainGRPC        string
+	dapiAddress      string
+	keyringDir       string
+	keyringBackend   string
+	keyringPassword  string
+	keyName          string
+	privateKey       string
 	secret           []byte
 	inventory        vo.GPUInventory
 	limits           run.Limits
@@ -51,6 +58,8 @@ type config struct {
 	refreshInterval   time.Duration
 	signatureWindow   time.Duration
 	requestTTL        time.Duration
+	chainPoll         time.Duration
+	dapiTimeout       time.Duration
 }
 
 func load() (config, error) {
@@ -66,6 +75,13 @@ func load() (config, error) {
 		containerUser:    env("CONTAINER_USER", "1000:1000"),
 		nvidiaSMI:        env("NVIDIA_SMI", "nvidia-smi"),
 		meshEndpoint:     env("MESH_ENDPOINT", ""),
+		chainGRPC:        env("CHAIN_GRPC", ""),
+		dapiAddress:      env("DAPI", ""),
+		keyringDir:       env("KEYRING_DIR", "/root/.inference"),
+		keyringBackend:   env("KEYRING_BACKEND", "file"),
+		keyringPassword:  env("KEYRING_PASSWORD", ""),
+		keyName:          env("KEY_NAME", ""),
+		privateKey:       env("PRIVATE_KEY", ""),
 		secret:           []byte(env("SHARED_SECRET", "")),
 		supportedVersion: env("SUPPORTED_VERSION", ""),
 		logLevel:         env("LOG_LEVEL", "info"),
@@ -127,6 +143,8 @@ func load() (config, error) {
 		"REFRESH_INTERVAL":   &cfg.refreshInterval,
 		"SIGNATURE_WINDOW":   &cfg.signatureWindow,
 		"REQUEST_TTL":        &cfg.requestTTL,
+		"CHAIN_POLL":         &cfg.chainPoll,
+		"DAPI_TIMEOUT":       &cfg.dapiTimeout,
 	} {
 		value, err := duration(name, defaults[name])
 		if err != nil {
@@ -150,6 +168,8 @@ var defaults = map[string]time.Duration{
 	"REFRESH_INTERVAL":   5 * time.Minute,
 	"SIGNATURE_WINDOW":   time.Minute,
 	"REQUEST_TTL":        time.Hour,
+	"CHAIN_POLL":         5 * time.Second,
+	"DAPI_TIMEOUT":       30 * time.Second,
 }
 
 func (c config) validate() error {
@@ -158,8 +178,12 @@ func (c config) validate() error {
 		return fmt.Errorf("TRAINSHARD_PARTICIPANT is required")
 	case len(c.nodes) == 0:
 		return fmt.Errorf("TRAINSHARD_NODES is required")
-	case len(c.secret) == 0:
-		return fmt.Errorf("TRAINSHARD_SHARED_SECRET is required")
+	case len(c.secret) == 0 && c.keyName == "" && c.privateKey == "":
+		return fmt.Errorf("this daemon needs something to sign with: TRAINSHARD_KEY_NAME to sign as the participant, or TRAINSHARD_SHARED_SECRET to stand in for a key")
+	case len(c.secret) > 0 && (c.keyName != "" || c.privateKey != ""):
+		return fmt.Errorf("TRAINSHARD_SHARED_SECRET stands in for a key and this daemon has one: keep the key and drop the secret")
+	case (c.chainGRPC == "") != (c.dapiAddress == ""):
+		return fmt.Errorf("TRAINSHARD_CHAIN_GRPC and TRAINSHARD_DAPI belong together: the chain says what is reserved, the dapi signs what this machine holds no key for")
 	case c.admin != "" && !loopback(c.admin):
 		return fmt.Errorf("TRAINSHARD_ADMIN_LISTEN %q must be a loopback address, abort carries no signature and whoever reaches the port can stop a run", c.admin)
 
