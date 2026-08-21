@@ -1,0 +1,20 @@
+#!/bin/sh
+# Stands in for the driver's own tool on a machine that has no cards. It answers the two questions
+# the daemon asks: which cards are here, and what is running on them. Nothing runs on them here.
+model=${FAKE_GPU_MODEL:-A100}
+count=${FAKE_GPU_COUNT:-1}
+
+case "$1" in
+  --query-gpu=name)
+    i=0
+    while [ "$i" -lt "$count" ]; do
+      echo "$model"
+      i=$((i + 1))
+    done
+    ;;
+  --query-compute-apps=pid,gpu_uuid) ;;
+  *)
+    echo "unsupported query: $*" >&2
+    exit 1
+    ;;
+esac

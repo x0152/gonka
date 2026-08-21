@@ -1,6 +1,6 @@
 [
   {
-    "id": "wiremock",
+    "id": "wiremock2",
     "host": "join2-mock-server",
     "inference_port": 8080,
     "poc_port": 8080,
@@ -15,11 +15,11 @@
     },
     "hardware": [
       {
-        "type": "A600",
-        "count": 50
+        "type": "A100",
+        "count": 1
       },
       {
-        "type": "A5500",
+        "type": "T4",
         "count": 2
       }
     ]

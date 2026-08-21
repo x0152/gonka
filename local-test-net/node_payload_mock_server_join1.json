@@ -15,8 +15,12 @@
     },
     "hardware": [
       {
-        "type": "v5e",
-        "count": 80
+        "type": "A100",
+        "count": 1
+      },
+      {
+        "type": "T4",
+        "count": 2
       }
     ]
   }

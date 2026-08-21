@@ -1,0 +1,33 @@
+# Runs the training daemon the way a real host does: real containers, real sandboxes, real wireguard,
+# a real ruleset and real disk quotas on an xfs the testbed mounts for it. The one thing this laptop
+# cannot give it is cards, so only the driver tool is faked, in ./trainshard-testbed.
+#
+# Layer it over docker-compose.trainshard.yml.
+services:
+  trainshardd:
+    privileged: true
+    pid: host
+    volumes:
+      - ./prod-local/${KEY_NAME}:/root/.inference
+      - ./trainshard-testbed:/testbed:ro
+      - /var/run/docker.sock:/var/run/docker.sock
+      # the run's volume is bound into its container by the engine on the host, so this path has to
+      # mean the same thing on both sides of the socket
+      - /var/lib/trainshardd/${KEY_NAME}:/var/lib/trainshardd/${KEY_NAME}
+    environment:
+      - TRAINSHARD_MACHINE=docker
+      - TRAINSHARD_STATE_DIR=/var/lib/trainshardd/${KEY_NAME}
+      # the quota tool is given the filesystem the volumes sit on, which is the mount, not the volumes
+      - TRAINSHARD_VOLUME_MOUNT=/var/lib/trainshardd/${KEY_NAME}
+      - TRAINSHARD_NVIDIA_SMI=/testbed/nvidia-smi
+      - FAKE_GPU_MODEL=${TRAINSHARD_GPU_MODEL:-A100}
+      - FAKE_GPU_COUNT=${TRAINSHARD_GPUS:-1}
+      - TRAINSHARD_GPU_KIND=nvidia.com/gpu
+      - TRAINSHARD_MESH_ENDPOINT=${KEY_NAME}-trainshardd
+      - TRAINSHARD_MESH_PORTS=51820-51821
+      - TRAINSHARD_SANDBOX_IMAGE=${TRAINSHARD_SANDBOX_IMAGE:-registry.k8s.io/pause:3.9}
+      - TRAINSHARD_CONTAINER_MEMORY_BYTES=268435456
+      - TRAINSHARD_CONTAINER_NANO_CPUS=500000000
+      - TRAINSHARD_MIN_FREE_DISK_BYTES=104857600
+      # the run reaches the registry through the same names the rest of this network uses
+      - TRAINSHARD_DENIED_CIDRS=169.254.0.0/16

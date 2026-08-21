@@ -1,0 +1,38 @@
+# One training daemon per participant, on the machine the participant already serves inference from.
+# It reads the chain over grpc, signs through the participant's own dapi, and runs the training
+# itself in memory: a laptop has no gpus to lend.
+services:
+  trainshardd:
+    container_name: ${KEY_NAME}-trainshardd
+    image: ghcr.io/gonka-ai/trainshardd:latest
+    restart: unless-stopped
+    volumes:
+      - ./prod-local/${KEY_NAME}:/root/.inference
+    ports:
+      - "${TRAINSHARD_PORT:-9700}:9700"
+    environment:
+      - TRAINSHARD_PARTICIPANT=${TRAINSHARD_PARTICIPANT}
+      - TRAINSHARD_NODES=${TRAINSHARD_NODES:-wiremock}
+      - TRAINSHARD_LISTEN=0.0.0.0:9700
+      - TRAINSHARD_STATE_DIR=/var/lib/trainshardd
+      - TRAINSHARD_MACHINE=memory
+      - TRAINSHARD_GPU_MODEL=${TRAINSHARD_GPU_MODEL:-A100}
+      - TRAINSHARD_GPUS=${TRAINSHARD_GPUS:-3}
+      - TRAINSHARD_CHAIN_GRPC=${KEY_NAME}-node:9090
+      - TRAINSHARD_DAPI=http://${KEY_NAME}-api:9200
+      - TRAINSHARD_KEY_NAME=${TRAINSHARD_KEY_NAME:-${KEY_NAME}}
+      - TRAINSHARD_KEYRING_DIR=/root/.inference
+      - TRAINSHARD_KEYRING_BACKEND=${KEYRING_BACKEND:-test}
+      - TRAINSHARD_KEYRING_PASSWORD=${KEYRING_PASSWORD:-}
+      - TRAINSHARD_RECONCILE_INTERVAL=5s
+      - TRAINSHARD_REFRESH_INTERVAL=30s
+      - TRAINSHARD_OPT_IN_TTL=5m
+      - TRAINSHARD_PREPARE_DEADLINE=5m
+      - TRAINSHARD_LOG_LEVEL=debug
+    networks:
+      - chain-public
+
+networks:
+  chain-public:
+    name: chain-public
+    external: true

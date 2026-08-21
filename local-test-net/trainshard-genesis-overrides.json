@@ -1,0 +1,44 @@
+{
+  "app_state": {
+    "inference": {
+      "params": {
+        "epoch_params": {
+          "epoch_length": "60",
+          "poc_stage_duration": "4",
+          "poc_exchange_duration": "2",
+          "poc_validation_delay": "1",
+          "poc_validation_duration": "12",
+          "set_new_validators_delay": "2"
+        },
+        "poc_params": {
+          "poc_v2_enabled": true,
+          "confirmation_poc_v2_enabled": true,
+          "validation_slots": 2,
+          "poc_normalization_enabled": false,
+          "models": [
+            {
+              "model_id": "Qwen/Qwen2.5-7B-Instruct",
+              "seq_len": "256",
+              "stat_test": {
+                "dist_threshold": { "value": "4", "exponent": -1 },
+                "p_mismatch": { "value": "1", "exponent": -1 },
+                "p_value_threshold": { "value": "5", "exponent": -2 }
+              },
+              "weight_scale_factor": { "value": "1" }
+            }
+          ]
+        },
+        "training_params": {
+          "training_enabled": true,
+          "allowed_gpu_profile_ids": ["A100 x1 | T4 x2", "V5E x80"],
+          "min_duration_blocks": "10",
+          "settled_shard_retention_blocks": "300",
+          "max_reserved_share_per_model_bps": 10000,
+          "max_reserved_share_per_profile_bps": 10000,
+          "opt_in_ttl_blocks": "500",
+          "release_buffer_blocks": "5"
+        }
+      }
+    }
+  }
+}

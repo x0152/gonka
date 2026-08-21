@@ -5,6 +5,8 @@ import (
 	"fmt"
 	"net/http"
 
+	"github.com/productscience/inference/x/inference/types"
+
 	"trainshard/internal/domain/shared"
 	"trainshard/internal/domain/shared/vo"
 )
@@ -57,11 +59,12 @@ func (c *Client) node(ctx context.Context, ref vo.NodeRef) (node, error) {
 		fmt.Sprintf("the dapi serves no node %q: a training node is the node the dapi serves inference from, under the same id", ref.NodeID))
 }
 
-// drained holds when the node is out of the way for good: disabled so nothing sends it new work,
-// holding no lock from work already sent, and reporting itself off inference and off poc
+// drained holds when the node is out of the way: disabled so no epoch gives it work, holding no lock
+// from work already sent, and not in the middle of a proof of compute, which owns the cards outright.
+// A disabled node stays up and idle rather than stopping — the dapi has no way to shut one down — so
+// what finally clears the cards is the gpu check, not this
 func drained(held node) bool {
-	if held.State.AdminState.Enabled || held.State.LockCount > 0 {
-		return false
-	}
-	return held.State.CurrentStatus != "INFERENCE" && held.State.CurrentStatus != "POC"
+	return !held.State.AdminState.Enabled &&
+		held.State.LockCount == 0 &&
+		held.State.CurrentStatus != types.HardwareNodeStatus_POC.String()
 }

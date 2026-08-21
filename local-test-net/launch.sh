@@ -16,7 +16,7 @@ docker run --rm -v "$(pwd):/workdir" -w /workdir alpine:3.19 rm -rf prod-local 2
 export PUBLIC_URL="http://${KEY_NAME}-proxy"
 export POC_CALLBACK_URL="http://${KEY_NAME}-api:9100"
 export IS_GENESIS=true
-export WIREMOCK_PORT=8090
+export WIREMOCK_PORT=${WIREMOCK_PORT:-8090}
 mkdir -p "./prod-local/wiremock/$KEY_NAME/mappings/"
 mkdir -p "./prod-local/wiremock/$KEY_NAME/__files/"
 cp ../testermint/src/main/resources/mappings/*.json "./prod-local/wiremock/$KEY_NAME/mappings/"
@@ -24,13 +24,20 @@ sed "s/{{KEY_NAME}}/$KEY_NAME/g" ../testermint/src/main/resources/alternative-ma
 if [ -n "$(ls -A ./public-html 2>/dev/null)" ]; then
   cp -r ../public-html/* "./prod-local/wiremock/$KEY_NAME/__files/"
 fi
-export WIREMOCK_PORT_2=8089
+export WIREMOCK_PORT_2=${WIREMOCK_PORT_2:-8089}
 mkdir -p "./prod-local/wiremock-2/$KEY_NAME/mappings/"
 mkdir -p "./prod-local/wiremock-2/$KEY_NAME/__files/"
 cp ../testermint/src/main/resources/mappings/*.json "./prod-local/wiremock-2/$KEY_NAME/mappings/"
 cp ../testermint/src/main/resources/alternative-mappings/generate_poc.json "./prod-local/wiremock-2/$KEY_NAME/mappings/generate_poc.json"
 if [ -n "$(ls -A ./public-html 2>/dev/null)" ]; then
   cp -r ../public-html/* "./prod-local/wiremock-2/$KEY_NAME/__files/"
+fi
+
+# the genesis node merges this over the genesis the image was built with, which is the only way to
+# change a chain parameter that must already hold in the first epoch
+if [ -n "${GENESIS_OVERRIDES_JSON:-}" ]; then
+  docker run --rm -v "$(pwd):/workdir" -v "$GENESIS_OVERRIDES_JSON:/overrides.json:ro" -w /workdir alpine:3.19 \
+    sh -c "mkdir -p prod-local/$KEY_NAME && cp /overrides.json prod-local/$KEY_NAME/genesis_overrides.json"
 fi
 
 echo "Starting genesis node"

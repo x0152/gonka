@@ -30,10 +30,16 @@ type Client struct {
 	poll  time.Duration
 }
 
+// asking again every second is as often as a chain that makes a block every few has anything new
+const asOftenAsBlocks = time.Second
+
 func Dial(cfg Config) (*Client, error) {
 	conn, err := grpc.NewClient(cfg.Address, grpc.WithTransportCredentials(insecure.NewCredentials()))
 	if err != nil {
 		return nil, fmt.Errorf("chain %q: %w", cfg.Address, err)
+	}
+	if cfg.Poll <= 0 {
+		cfg.Poll = asOftenAsBlocks
 	}
 	return &Client{conn: conn, query: types.NewQueryClient(conn), poll: cfg.Poll}, nil
 }

@@ -20,16 +20,20 @@
     "inference": {
       "params": {
         "epoch_params": {
-          "epoch_length": "50",
+          "epoch_length": "80",
           "epoch_multiplier": "1",
           "epoch_shift": "0",
           "default_unit_of_compute_price": "100",
-          "poc_stage_duration": "4",
-          "poc_exchange_duration": "1",
-          "poc_validation_delay": "1",
-          "poc_validation_duration": "4",
-          "set_new_validators_delay": "1",
+          "poc_stage_duration": "8",
+          "poc_exchange_duration": "4",
+          "poc_validation_delay": "2",
+          "poc_validation_duration": "8",
+          "set_new_validators_delay": "4",
           "confirmation_poc_safety_window": "0"
+        },
+        "poc_params": {
+          "poc_v2_enabled": true,
+          "confirmation_poc_v2_enabled": true
         },
         "validation_params": {
           "expiration_blocks": "10",
@@ -70,6 +74,16 @@
           "v_min": "0",
           "cap_factor": { "value": "1", "exponent": 0 },
           "initial_model_id": "Qwen/Qwen2.5-7B-Instruct"
+        },
+        "training_params": {
+          "training_enabled": true,
+          "allowed_gpu_profile_ids": ["A100 x1 | T4 x2", "V5E x80"],
+          "min_duration_blocks": "10",
+          "settled_shard_retention_blocks": "300",
+          "max_reserved_share_per_model_bps": 10000,
+          "max_reserved_share_per_profile_bps": 10000,
+          "opt_in_ttl_blocks": "500",
+          "release_buffer_blocks": "5"
         },
         "maintenance_params": {
           "maintenance_enabled": true,

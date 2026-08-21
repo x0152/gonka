@@ -92,6 +92,17 @@ func (s *Signer) send(ctx context.Context, msg sdk.Msg) error {
 	builder.SetGasLimit(gas)
 	builder.SetFeeAmount(sdk.NewCoins(sdk.NewCoin(denom, math.NewInt(gas*s.price(ctx)))))
 
+	// what is signed covers who signs it, so the key and the sequence go in before the signature that
+	// then replaces this blank one
+	blank := signingtypes.SignatureV2{
+		PubKey:   s.key.Account().PubKey(),
+		Data:     &signingtypes.SingleSignatureData{SignMode: signingtypes.SignMode_SIGN_MODE_DIRECT},
+		Sequence: sequence,
+	}
+	if err := builder.SetSignatures(blank); err != nil {
+		return err
+	}
+
 	signature, err := clienttx.SignWithPrivKey(ctx, signingtypes.SignMode_SIGN_MODE_DIRECT,
 		authsigning.SignerData{ChainID: s.chainID, AccountNumber: number, Sequence: sequence},
 		builder, s.key.Account(), s.config, sequence)
@@ -114,10 +125,35 @@ func (s *Signer) send(ctx context.Context, msg sdk.Msg) error {
 		return shared.New("CHAIN_UNREACHABLE", shared.ErrUnavailable, err.Error())
 	}
 	if answer.TxResponse.Code != 0 {
-		return shared.New("CHAIN_REFUSED", shared.ErrUnavailable,
-			fmt.Sprintf("the chain refused %s with code %d: %s", sdk.MsgTypeURL(msg), answer.TxResponse.Code, answer.TxResponse.RawLog))
+		return refused(msg, answer.TxResponse.Code, answer.TxResponse.RawLog)
 	}
-	return nil
+	return s.landed(ctx, msg, answer.TxResponse.TxHash)
+}
+
+// landed waits for the block that runs the message. The chain answers a broadcast the moment it takes
+// the transaction, so without this the next one would sign with a sequence the account no longer has,
+// and a message the chain then refused would read as done
+func (s *Signer) landed(ctx context.Context, msg sdk.Msg, hash string) error {
+	for {
+		answer, err := s.sender.GetTx(ctx, &txtypes.GetTxRequest{Hash: hash})
+		switch {
+		case err == nil && answer.TxResponse.Code != 0:
+			return refused(msg, answer.TxResponse.Code, answer.TxResponse.RawLog)
+		case err == nil:
+			return nil
+		}
+		select {
+		case <-ctx.Done():
+			return shared.New("CHAIN_SLOW", shared.ErrUnavailable,
+				fmt.Sprintf("the chain took %s as %s and never ran it", sdk.MsgTypeURL(msg), hash))
+		case <-time.After(s.poll):
+		}
+	}
+}
+
+func refused(msg sdk.Msg, code uint32, log string) error {
+	return shared.New("CHAIN_REFUSED", shared.ErrUnavailable,
+		fmt.Sprintf("the chain refused %s with code %d: %s", sdk.MsgTypeURL(msg), code, log))
 }
 
 func (s *Signer) account(ctx context.Context) (number, sequence uint64, err error) {
