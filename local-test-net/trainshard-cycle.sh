@@ -485,6 +485,15 @@ scenario_quota() {
   used=$(docker exec "$here" du -sk /workspace | awk '{print $1}')
   check "and what it wrote stayed inside" "$([ "$used" -le $((limit / 1024)) ] && echo yes || echo no)" yes
 
+  check "the run cannot write outside the disk it was given" \
+    "$(refused docker exec "$here" sh -c 'echo x > /marker')" yes
+  check "nor into the files the engine handed it" \
+    "$(refused docker exec "$here" sh -c 'echo x >> /etc/resolv.conf')" yes
+  check "its scratch is memory, not the host disk" \
+    "$(docker exec "$here" sh -c 'df -t tmpfs /tmp > /dev/null && echo yes || echo no')" yes
+  check "and what it prints is rolled" \
+    "$(docker inspect "$here" --format '{{if .HostConfig.LogConfig.Config}}yes{{else}}no{{end}}')" yes
+
   $CTL stop "$shard_id"
   tx "$CREATOR" inference settle-trainshard "$shard_id" > /dev/null
   sleep 15
