@@ -304,13 +304,10 @@ logs_of() {
 nodes() { echo "$HOSTS" | wc -w | tr -d ' '; }
 column() { awk -v col="$1" -v want="$2" 'NR > 1 && $col == want' | wc -l | tr -d ' '; }
 
-# sessions is what an operator gets out of a running node: its output, what it wrote, and a way in
+# sessions is what an operator gets out of a running node: its output and a way in
 sessions() {
   local shard_id=$1 node=$2
   check "logs come back" "$(logs_of "$shard_id" "$node" | grep -c training)" 1
-
-  $CTL artifacts "$shard_id" "$node" > /tmp/trainshard-artifacts.tar 2>&1 || true
-  check "artifacts hold what the run wrote" "$(tar tf /tmp/trainshard-artifacts.tar 2> /dev/null | grep -c result.txt)" 1
 
   printf 'echo alive\nexit\n' | $CTL shell "$shard_id" "$node" > /tmp/trainshard-shell.txt 2>&1 || true
   # a terminal echoes what it is told, so the answer is the line the shell itself printed

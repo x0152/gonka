@@ -131,7 +131,6 @@ func serve() error {
 	sessions := session.New(session.Config{Participant: cfg.participant, Window: cfg.signatureWindow}, session.Deps{
 		Chain:    outside.chain,
 		Streams:  parts.streams,
-		Volumes:  parts.volumes,
 		Sessions: state.Sessions(),
 		Clock:    clock,
 	})
