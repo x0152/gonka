@@ -17,11 +17,9 @@ import (
 	"trainshard/internal/domain/shard"
 	"trainshard/internal/domain/shared/vo"
 	"trainshard/internal/infrastructure/adapters/chain"
-	chainfake "trainshard/internal/infrastructure/adapters/chain/fake"
 	clockadapter "trainshard/internal/infrastructure/adapters/clock"
 	"trainshard/internal/infrastructure/adapters/hosts"
 	"trainshard/internal/infrastructure/adapters/signing/cosmos"
-	"trainshard/internal/infrastructure/adapters/signing/hmac"
 	"trainshard/internal/utils/clix"
 )
 
@@ -71,7 +69,7 @@ func drive() error {
 	if err != nil {
 		return err
 	}
-	outside, err := connect(cfg, clock, signer)
+	outside, err := connect(cfg, signer)
 	if err != nil {
 		return err
 	}
@@ -97,7 +95,6 @@ func drive() error {
 	return commands[command](context.Background(), args)
 }
 
-// keys signs the run's requests as its actor and names whoever signed what comes back
 type keys interface {
 	Address() vo.Address
 	Sign(payload []byte) []byte
@@ -105,32 +102,19 @@ type keys interface {
 }
 
 func key(cfg config) (keys, error) {
-	switch {
-	case cfg.privateKey != "":
+	if cfg.privateKey != "" {
 		return cosmos.FromHex(cfg.privateKey)
-	case cfg.keyName != "":
-		return cosmos.FromKeyring(cfg.keyringDir, cfg.keyringBackend, cfg.keyringPassword, cfg.keyName)
-	default:
-		return hmac.New(cfg.secret, cfg.actor), nil
 	}
+	return cosmos.FromKeyring(cfg.keyringDir, cfg.keyringBackend, cfg.keyringPassword, cfg.keyName)
 }
 
-// outside is the chain: it says what the shard reserves and it takes back what the run gives up
 type outside struct {
 	chain     shard.ChainReader
 	submitter shard.ChainSubmitter
 	close     func() error
 }
 
-func connect(cfg config, clock clockadapter.System, signer keys) (outside, error) {
-	if cfg.chainGRPC == "" {
-		made, err := chainfake.Load(cfg.chainSeed, clock)
-		if err != nil {
-			return outside{}, err
-		}
-		return outside{chain: made, submitter: made, close: func() error { return nil }}, nil
-	}
-
+func connect(cfg config, signer keys) (outside, error) {
 	client, err := chain.Dial(chain.Config{Address: cfg.chainGRPC})
 	if err != nil {
 		return outside{}, err

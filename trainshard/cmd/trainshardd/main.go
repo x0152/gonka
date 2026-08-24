@@ -4,7 +4,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"log/slog"
 	"net/http"
 	"os"
 	"os/signal"
@@ -21,12 +20,9 @@ import (
 	"trainshard/internal/domain/shard"
 	"trainshard/internal/domain/shared/vo"
 	"trainshard/internal/infrastructure/adapters/chain"
-	chainfake "trainshard/internal/infrastructure/adapters/chain/fake"
 	clockadapter "trainshard/internal/infrastructure/adapters/clock"
 	"trainshard/internal/infrastructure/adapters/dapi"
-	nodemanagerfake "trainshard/internal/infrastructure/adapters/nodemanager/fake"
 	"trainshard/internal/infrastructure/adapters/signing/cosmos"
-	"trainshard/internal/infrastructure/adapters/signing/hmac"
 	"trainshard/internal/infrastructure/repositories/localstate"
 	"trainshard/internal/utils/httpx"
 	"trainshard/internal/utils/logger"
@@ -66,7 +62,7 @@ func serve() error {
 		return fmt.Errorf("the key signs as %s and this daemon speaks for %s: a node's mesh identity is only believed from its own participant", signer.Address(), cfg.participant)
 	}
 
-	outside, err := connect(cfg, clock, log)
+	outside, err := connect(cfg)
 	if err != nil {
 		return err
 	}
@@ -125,18 +121,20 @@ func serve() error {
 		GPU:       parts.gpu,
 		Chain:     outside.chain,
 		Submitter: outside.submitter,
+		Clock:     clock,
 		Log:       log,
 	})
 
-	sessions := session.New(session.Config{Participant: cfg.participant, Window: cfg.signatureWindow}, session.Deps{
+	sessions := session.New(session.Config{Participant: cfg.participant}, session.Deps{
 		Chain:    outside.chain,
 		Streams:  parts.streams,
 		Sessions: state.Sessions(),
+		Served:   state.Served(clock, cfg.signatureWindow),
 		Clock:    clock,
 	})
 
 	mux := http.NewServeMux()
-	guard, logged := signedhttp.New(signer, clock, cfg.signatureWindow).Wrap, httpx.Log(log, clock)
+	guard, logged := signedhttp.New(signer, clock, cfg.signatureWindow, vo.Address(cfg.participant)).Wrap, httpx.Log(log, clock)
 	boundary := func(next http.Handler) http.Handler { return logged(guard(next)) }
 	runs.Mount(mux, boundary)
 	nodes.Mount(mux, boundary)
@@ -184,7 +182,6 @@ func serve() error {
 	return err
 }
 
-// keys signs as this participant and names whoever signed what reaches us
 type keys interface {
 	Address() vo.Address
 	Sign(payload []byte) []byte
@@ -193,18 +190,12 @@ type keys interface {
 }
 
 func key(cfg config) (keys, error) {
-	switch {
-	case cfg.privateKey != "":
+	if cfg.privateKey != "" {
 		return cosmos.FromHex(cfg.privateKey)
-	case cfg.keyName != "":
-		return cosmos.FromKeyring(cfg.keyringDir, cfg.keyringBackend, cfg.keyringPassword, cfg.keyName)
-	default:
-		return hmac.New(cfg.secret, vo.Address(cfg.participant)), nil
 	}
+	return cosmos.FromKeyring(cfg.keyringDir, cfg.keyringBackend, cfg.keyringPassword, cfg.keyName)
 }
 
-// outside is everything this daemon does not decide for itself: what the chain reserves, and the
-// dapi that signs for it and owns the node it takes out of inference
 type outside struct {
 	chain        shard.ChainReader
 	watcher      shard.ChainWatcher
@@ -225,20 +216,7 @@ func (r reservations) Release(ctx context.Context, shardID vo.ShardID, node vo.N
 	return r.dapi.Release(ctx, shardID, node, reason)
 }
 
-func connect(cfg config, clock clockadapter.System, log *slog.Logger) (outside, error) {
-	if cfg.chainGRPC == "" {
-		made, err := loadFakeChain(cfg, clock)
-		if err != nil {
-			return outside{}, err
-		}
-		log.Warn("no chain and no dapi: this daemon reserves nothing, releases nothing and stops no inference")
-		return outside{
-			chain: made, watcher: made, submitter: made, reservations: made,
-			control: nodemanagerfake.New(log),
-			close:   func() error { return nil },
-		}, nil
-	}
-
+func connect(cfg config) (outside, error) {
 	client, err := chain.Dial(chain.Config{Address: cfg.chainGRPC, Poll: cfg.chainPoll})
 	if err != nil {
 		return outside{}, err
@@ -254,11 +232,4 @@ func connect(cfg config, clock clockadapter.System, log *slog.Logger) (outside, 
 		control:      node,
 		close:        client.Close,
 	}, nil
-}
-
-func loadFakeChain(cfg config, clock clockadapter.System) (*chainfake.Chain, error) {
-	if cfg.chainSeed == "" {
-		return chainfake.New(clock), nil
-	}
-	return chainfake.Load(cfg.chainSeed, clock)
 }
