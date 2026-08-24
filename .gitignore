@@ -18,6 +18,7 @@ decentralized-api/dist/
 decentralized-api/responses/
 devshard/build/
 trainshard/build/
+local-test-net/.cloud/
 inference-chain/build/
 inference-chain/dist/
 /decentralized-api/decentralized-api
